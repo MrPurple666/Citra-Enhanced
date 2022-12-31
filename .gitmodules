@@ -58,3 +58,6 @@
 [submodule "sdl2"]
 	path = externals/sdl2/SDL
 	url = https://github.com/libsdl-org/SDL
+[submodule "externals/libyuv"]
+	path = externals/libyuv
+	url = https://github.com/lemenkov/libyuv
