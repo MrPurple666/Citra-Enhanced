@@ -58,6 +58,7 @@ OpenGLState::OpenGLState() {
     texture_cube_unit.texture_cube = 0;
     texture_cube_unit.sampler = 0;
 
+    texture_buffer_lut_lf.texture_buffer = 0;
     texture_buffer_lut_rg.texture_buffer = 0;
     texture_buffer_lut_rgba.texture_buffer = 0;
 
@@ -437,6 +438,8 @@ OpenGLState& OpenGLState::ResetTexture(GLuint handle) {
     }
     if (texture_cube_unit.texture_cube == handle)
         texture_cube_unit.texture_cube = 0;
+    if (texture_buffer_lut_lf.texture_buffer == handle)
+        texture_buffer_lut_lf.texture_buffer = 0;
     if (texture_buffer_lut_rg.texture_buffer == handle)
         texture_buffer_lut_rg.texture_buffer = 0;
     if (texture_buffer_lut_rgba.texture_buffer == handle)

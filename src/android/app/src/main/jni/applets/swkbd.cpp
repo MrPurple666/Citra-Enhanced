@@ -70,24 +70,23 @@ void AndroidKeyboard::Execute(const Frontend::KeyboardConfig& config) {
 
 void AndroidKeyboard::ShowError(const std::string& error) {
     JNIEnv* env = IDCache::GetEnvForThread();
-    env->CallStaticVoidMethod(s_software_keyboard_class, s_swkbd_show_error,
-                              ToJString(env, error));
+    env->CallStaticVoidMethod(s_software_keyboard_class, s_swkbd_show_error, ToJString(env, error));
 }
 
 void InitJNI(JNIEnv* env) {
     s_software_keyboard_class = reinterpret_cast<jclass>(
-        env->NewGlobalRef(env->FindClass("org/citra/emu/ui/SoftwareKeyboard")));
+        env->NewGlobalRef(env->FindClass("org/citra/citra_emu/applets/SoftwareKeyboard")));
     s_keyboard_config_class = reinterpret_cast<jclass>(env->NewGlobalRef(
-        env->FindClass("org/citra/emu/ui/SoftwareKeyboard$KeyboardConfig")));
+        env->FindClass("org/citra/citra_emu/applets/SoftwareKeyboard$KeyboardConfig")));
     s_keyboard_data_class = reinterpret_cast<jclass>(env->NewGlobalRef(
-        env->FindClass("org/citra/emu/ui/SoftwareKeyboard$KeyboardData")));
+        env->FindClass("org/citra/citra_emu/applets/SoftwareKeyboard$KeyboardData")));
     s_validation_error_class = reinterpret_cast<jclass>(env->NewGlobalRef(
-        env->FindClass("org/citra/emu/ui/SoftwareKeyboard$ValidationError")));
+        env->FindClass("org/citra/citra_emu/applets/SoftwareKeyboard$ValidationError")));
 
     s_swkbd_execute = env->GetStaticMethodID(
         s_software_keyboard_class, "Execute",
-        "(Lorg/citra/emu/ui/SoftwareKeyboard$KeyboardConfig;)Lorg/citra/emu/"
-        "ui/SoftwareKeyboard$KeyboardData;");
+        "(Lorg/citra/citra_emu/applets/SoftwareKeyboard$KeyboardConfig;)Lorg/citra/citra_emu/"
+        "applets/SoftwareKeyboard$KeyboardData;");
     s_swkbd_show_error =
         env->GetStaticMethodID(s_software_keyboard_class, "ShowError", "(Ljava/lang/String;)V");
 }
@@ -122,12 +121,10 @@ jobject ToJavaValidationError(Frontend::ValidationError error) {
     return env->GetStaticObjectField(
         s_validation_error_class,
         env->GetStaticFieldID(s_validation_error_class, ValidationErrorNameMap.at(error),
-                              "Lorg/citra/emu/ui/SoftwareKeyboard$ValidationError;"));
+                              "Lorg/citra/citra_emu/applets/SoftwareKeyboard$ValidationError;"));
 }
 
-extern "C" {
-
-jobject Java_org_citra_emu_ui_SoftwareKeyboard_ValidateFilters(JNIEnv* env,
+jobject Java_org_citra_citra_1emu_applets_SoftwareKeyboard_ValidateFilters(JNIEnv* env,
                                                                            jclass clazz,
                                                                            jstring text) {
 
@@ -136,12 +133,10 @@ jobject Java_org_citra_emu_ui_SoftwareKeyboard_ValidateFilters(JNIEnv* env,
     return ToJavaValidationError(ret);
 }
 
-jobject Java_org_citra_emu_ui_SoftwareKeyboard_ValidateInput(JNIEnv* env, jclass clazz,
+jobject Java_org_citra_citra_1emu_applets_SoftwareKeyboard_ValidateInput(JNIEnv* env, jclass clazz,
                                                                          jstring text) {
 
     const auto ret =
         Core::System::GetInstance().GetSoftwareKeyboard()->ValidateInput(GetJString(env, text));
     return ToJavaValidationError(ret);
 }
-
-} // extern "C"

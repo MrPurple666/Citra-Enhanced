@@ -40,12 +40,11 @@
             android:lines="1"
             android:maxLines="1"
             android:textAlignment="viewStart"
-            android:textColor="@color/header_text"
-            android:textStyle="bold"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintStart_toEndOf="@+id/image_game_screen"
             app:layout_constraintTop_toTopOf="parent"
-            tools:text="The Legend of Zelda\nOcarina of Time 3D" />
+            tools:text="The Legend of Zelda\nOcarina of Time 3D"
+            android:textColor="@color/header_text" />
 
         <TextView
             android:id="@+id/text_company"
@@ -55,12 +54,12 @@
             android:ellipsize="end"
             android:lines="1"
             android:maxLines="1"
-            android:textColor="@color/header_subtext"
             app:layout_constraintBottom_toBottomOf="@+id/image_game_screen"
             app:layout_constraintStart_toStartOf="@+id/text_game_title"
             app:layout_constraintTop_toBottomOf="@+id/text_game_title"
             app:layout_constraintVertical_bias="0.842"
-            tools:text="Nintendo" />
+            tools:text="Nintendo"
+            android:textColor="@color/header_subtext" />
 
         <TextView
             android:id="@+id/text_filename"
@@ -70,13 +69,12 @@
             android:ellipsize="end"
             android:lines="1"
             android:maxLines="1"
-            android:textColor="@color/citra_orange_no_theme"
-            android:textStyle="bold"
             app:layout_constraintBottom_toBottomOf="@+id/image_game_screen"
             app:layout_constraintStart_toStartOf="@+id/text_game_title"
             app:layout_constraintTop_toBottomOf="@+id/text_game_title"
             app:layout_constraintVertical_bias="0.0"
-            tools:text="Pilotwings_Resort.cxi" />
+            tools:text="Pilotwings_Resort.cxi"
+            android:textColor="@color/header_subtext" />
 
     </androidx.constraintlayout.widget.ConstraintLayout>
 

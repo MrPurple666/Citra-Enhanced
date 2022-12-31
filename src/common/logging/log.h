@@ -4,14 +4,14 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
-#include <fmt/format.h>
 #include "common/common_types.h"
-
+#include "common/logging/formatter.h"
 namespace Log {
 
 // trims up to and including the last of ../, ..\, src/, src\ in a string
-constexpr const char* TrimSourcePath(std::string_view source) {
+inline const char* TrimSourcePath(std::string_view source) {
     const auto rfind = [source](const std::string_view match) {
         return source.rfind(match) == source.npos ? 0 : (source.rfind(match) + match.size());
     };
@@ -93,6 +93,7 @@ enum class Class : ClassType {
     Service_IR,        ///< The IR service
     Service_Y2R,       ///< The Y2R (YUV to RGB conversion) service
     Service_PS,        ///< The PS (Process) service
+    Service_PLGLDR,    ///< The PLGLDR (plugin loader) service
     HW,                ///< Low-level hardware emulation
     HW_Memory,         ///< Memory-map and address translation
     HW_LCD,            ///< LCD register emulation

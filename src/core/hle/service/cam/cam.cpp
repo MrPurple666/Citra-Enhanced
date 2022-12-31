@@ -6,6 +6,7 @@
 #include "common/archives.h"
 #include "common/bit_set.h"
 #include "common/logging/log.h"
+#include "common/settings.h"
 #include "core/core.h"
 #include "core/core_timing.h"
 #include "core/frontend/camera/factory.h"
@@ -19,7 +20,6 @@
 #include "core/hle/service/cam/cam_s.h"
 #include "core/hle/service/cam/cam_u.h"
 #include "core/memory.h"
-#include "core/settings.h"
 
 SERVICE_CONSTRUCT_IMPL(Service::CAM::Module)
 
@@ -1118,11 +1118,12 @@ Module::Module(Core::System& system) : system(system) {
             system.Kernel().CreateEvent(ResetType::OneShot, "CAM::vsync_interrupt_event");
     }
     completion_event_callback = system.CoreTiming().RegisterEvent(
-        "CAM::CompletionEventCallBack",
-        [this](u64 userdata, s64 cycles_late) { CompletionEventCallBack(userdata, cycles_late); });
+        "CAM::CompletionEventCallBack", [this](std::uintptr_t user_data, s64 cycles_late) {
+            CompletionEventCallBack(user_data, cycles_late);
+        });
     vsync_interrupt_event_callback = system.CoreTiming().RegisterEvent(
-        "CAM::VsyncInterruptEventCallBack", [this](u64 userdata, s64 cycles_late) {
-            VsyncInterruptEventCallBack(userdata, cycles_late);
+        "CAM::VsyncInterruptEventCallBack", [this](std::uintptr_t user_data, s64 cycles_late) {
+            VsyncInterruptEventCallBack(user_data, cycles_late);
         });
 }
 

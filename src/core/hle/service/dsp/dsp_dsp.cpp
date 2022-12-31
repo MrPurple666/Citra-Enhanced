@@ -95,6 +95,9 @@ void DSP_DSP::WriteProcessPipe(Kernel::HLERequestContext& ctx) {
         buffer[6] = 0;
         buffer[7] = 0;
         break;
+    default:
+        LOG_ERROR(Service_DSP, "Unknown pipe {}", pipe);
+        break;
     }
 
     system.DSP().PipeWrite(pipe, buffer);
@@ -161,7 +164,7 @@ void DSP_DSP::ReadPipeIfPossible(Kernel::HLERequestContext& ctx) {
 
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 2);
     rb.Push(RESULT_SUCCESS);
-    rb.Push<u16>(pipe_buffer.size());
+    rb.Push<u16>(static_cast<u16>(pipe_buffer.size()));
     rb.PushStaticBuffer(std::move(pipe_buffer), 0);
 
     LOG_DEBUG(Service_DSP, "channel={}, peer={}, size=0x{:04X}, pipe_readable_size=0x{:04X}",
@@ -202,8 +205,8 @@ void DSP_DSP::UnloadComponent(Kernel::HLERequestContext& ctx) {
 
 void DSP_DSP::FlushDataCache(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx, 0x13, 2, 2);
-    const VAddr address = rp.Pop<u32>();
-    const u32 size = rp.Pop<u32>();
+    [[maybe_unused]] const VAddr address = rp.Pop<u32>();
+    [[maybe_unused]] const u32 size = rp.Pop<u32>();
     const auto process = rp.PopObject<Kernel::Process>();
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
@@ -215,8 +218,8 @@ void DSP_DSP::FlushDataCache(Kernel::HLERequestContext& ctx) {
 
 void DSP_DSP::InvalidateDataCache(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx, 0x14, 2, 2);
-    const VAddr address = rp.Pop<u32>();
-    const u32 size = rp.Pop<u32>();
+    [[maybe_unused]] const VAddr address = rp.Pop<u32>();
+    [[maybe_unused]] const u32 size = rp.Pop<u32>();
     const auto process = rp.PopObject<Kernel::Process>();
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);

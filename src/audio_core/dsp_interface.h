@@ -94,7 +94,7 @@ public:
     virtual void UnloadComponent() = 0;
 
     /// Select the sink to use based on sink id.
-    void SetSink(const std::string& sink_id, const std::string& audio_device);
+    void SetSink(std::string_view sink_id, std::string_view audio_device);
     /// Get the current sink
     Sink& GetSink();
     /// Enable/Disable audio stretching.
@@ -108,12 +108,12 @@ private:
     void FlushResidualStretcherAudio();
     void OutputCallback(s16* buffer, std::size_t num_frames);
 
-    std::unique_ptr<Sink> sink;
     std::atomic<bool> perform_time_stretching = false;
     std::atomic<bool> flushing_time_stretcher = false;
     Common::RingBuffer<s16, 0x2000, 2> fifo;
     std::array<s16, 2> last_frame{};
     TimeStretcher time_stretcher;
+    std::unique_ptr<Sink> sink;
 
     template <class Archive>
     void serialize(Archive& ar, const unsigned int) {}

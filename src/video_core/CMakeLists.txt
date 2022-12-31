@@ -14,6 +14,7 @@ add_library(video_core STATIC
     pica.h
     pica_state.h
     pica_types.h
+    precompiled_headers.h
     primitive_assembly.cpp
     primitive_assembly.h
     rasterizer_interface.h
@@ -27,12 +28,23 @@ add_library(video_core STATIC
     regs_texturing.h
     renderer_base.cpp
     renderer_base.h
+    rasterizer_cache/cached_surface.cpp
+    rasterizer_cache/cached_surface.h
+    rasterizer_cache/morton_swizzle.h
+    rasterizer_cache/pixel_format.h
+    rasterizer_cache/rasterizer_cache.cpp
+    rasterizer_cache/rasterizer_cache.h
+    rasterizer_cache/rasterizer_cache_types.h
+    rasterizer_cache/rasterizer_cache_utils.cpp
+    rasterizer_cache/rasterizer_cache_utils.h
+    rasterizer_cache/surface_params.cpp
+    rasterizer_cache/surface_params.h
+    rasterizer_cache/texture_runtime.cpp
+    rasterizer_cache/texture_runtime.h
     renderer_opengl/frame_dumper_opengl.cpp
     renderer_opengl/frame_dumper_opengl.h
     renderer_opengl/gl_rasterizer.cpp
     renderer_opengl/gl_rasterizer.h
-    renderer_opengl/gl_rasterizer_cache.cpp
-    renderer_opengl/gl_rasterizer_cache.h
     renderer_opengl/gl_resource_manager.cpp
     renderer_opengl/gl_resource_manager.h
     renderer_opengl/gl_shader_decompiler.cpp
@@ -49,8 +61,6 @@ add_library(video_core STATIC
     renderer_opengl/gl_state.h
     renderer_opengl/gl_stream_buffer.cpp
     renderer_opengl/gl_stream_buffer.h
-    renderer_opengl/gl_surface_params.cpp
-    renderer_opengl/gl_surface_params.h
     renderer_opengl/gl_vars.cpp
     renderer_opengl/gl_vars.h
     renderer_opengl/pica_to_gl.h
@@ -58,14 +68,14 @@ add_library(video_core STATIC
     renderer_opengl/post_processing_opengl.h
     renderer_opengl/renderer_opengl.cpp
     renderer_opengl/renderer_opengl.h
-    renderer_opengl/on_screen_display.cpp
-    renderer_opengl/on_screen_display.h
     renderer_opengl/texture_downloader_es.cpp
     renderer_opengl/texture_downloader_es.h
     renderer_opengl/texture_filters/anime4k/anime4k_ultrafast.cpp
     renderer_opengl/texture_filters/anime4k/anime4k_ultrafast.h
     renderer_opengl/texture_filters/bicubic/bicubic.cpp
     renderer_opengl/texture_filters/bicubic/bicubic.h
+    renderer_opengl/texture_filters/nearest_neighbor/nearest_neighbor.cpp
+    renderer_opengl/texture_filters/nearest_neighbor/nearest_neighbor.h
     renderer_opengl/texture_filters/scale_force/scale_force.cpp
     renderer_opengl/texture_filters/scale_force/scale_force.h
     renderer_opengl/texture_filters/texture_filter_base.h
@@ -114,6 +124,7 @@ set(SHADER_FILES
     renderer_opengl/texture_filters/anime4k/x_gradient.frag
     renderer_opengl/texture_filters/anime4k/y_gradient.frag
     renderer_opengl/texture_filters/bicubic/bicubic.frag
+    renderer_opengl/texture_filters/nearest_neighbor/nearest_neighbor.frag
     renderer_opengl/texture_filters/scale_force/scale_force.frag
     renderer_opengl/texture_filters/tex_coord.vert
     renderer_opengl/texture_filters/xbrz/xbrz_freescale.frag
@@ -152,7 +163,12 @@ create_target_directory_groups(video_core)
 
 target_link_libraries(video_core PUBLIC common core)
 target_link_libraries(video_core PRIVATE glad nihstro-headers Boost::serialization)
+set_target_properties(video_core PROPERTIES INTERPROCEDURAL_OPTIMIZATION ${ENABLE_LTO})
 
 if (ARCHITECTURE_x86_64)
     target_link_libraries(video_core PUBLIC xbyak)
+endif()
+
+if (CITRA_USE_PRECOMPILED_HEADERS)
+    target_precompile_headers(video_core PRIVATE precompiled_headers.h)
 endif()

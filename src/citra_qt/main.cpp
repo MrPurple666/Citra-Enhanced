@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #include <clocale>
+#include <filesystem>
 #include <fstream>
 #include <memory>
 #include <thread>
@@ -11,7 +12,7 @@
 #include <QFutureWatcher>
 #include <QLabel>
 #include <QMessageBox>
-#include <QOpenGLFunctions_3_3_Core>
+#include <QOpenGLFunctions_4_3_Core>
 #include <QSysInfo>
 #include <QtConcurrent/QtConcurrentRun>
 #include <QtGui>
@@ -34,6 +35,7 @@
 #include "citra_qt/compatibility_list.h"
 #include "citra_qt/configuration/config.h"
 #include "citra_qt/configuration/configure_dialog.h"
+#include "citra_qt/configuration/configure_per_game.h"
 #include "citra_qt/debugger/console.h"
 #include "citra_qt/debugger/graphics/graphics.h"
 #include "citra_qt/debugger/graphics/graphics_breakpoints.h"
@@ -51,6 +53,8 @@
 #include "citra_qt/hotkeys.h"
 #include "citra_qt/loading_screen.h"
 #include "citra_qt/main.h"
+#include "citra_qt/movie/movie_play_dialog.h"
+#include "citra_qt/movie/movie_record_dialog.h"
 #include "citra_qt/multiplayer/state.h"
 #include "citra_qt/qt_image_interface.h"
 #include "citra_qt/uisettings.h"
@@ -59,16 +63,20 @@
 #include "common/common_paths.h"
 #include "common/detached_tasks.h"
 #include "common/file_util.h"
+#include "common/literals.h"
 #include "common/logging/backend.h"
 #include "common/logging/filter.h"
 #include "common/logging/log.h"
 #include "common/logging/text_formatter.h"
+#include "common/memory_detect.h"
 #include "common/microprofile.h"
 #include "common/scm_rev.h"
 #include "common/scope_exit.h"
+#include "common/string_util.h"
 #ifdef ARCHITECTURE_x86_64
 #include "common/x64/cpu_detect.h"
 #endif
+#include "common/settings.h"
 #include "core/core.h"
 #include "core/dumping/backend.h"
 #include "core/file_sys/archive_extsavedata.h"
@@ -81,8 +89,9 @@
 #include "core/loader/loader.h"
 #include "core/movie.h"
 #include "core/savestate.h"
-#include "core/settings.h"
 #include "game_list_p.h"
+#include "input_common/main.h"
+#include "network/network_settings.h"
 #include "ui_main.h"
 #include "video_core/renderer_base.h"
 #include "video_core/video_core.h"
@@ -118,17 +127,19 @@ enum class CalloutFlag : uint32_t {
 };
 
 void GMainWindow::ShowTelemetryCallout() {
-    if (UISettings::values.callout_flags & static_cast<uint32_t>(CalloutFlag::Telemetry)) {
+    if (UISettings::values.callout_flags.GetValue() &
+        static_cast<uint32_t>(CalloutFlag::Telemetry)) {
         return;
     }
 
-    UISettings::values.callout_flags |= static_cast<uint32_t>(CalloutFlag::Telemetry);
+    UISettings::values.callout_flags =
+        UISettings::values.callout_flags.GetValue() | static_cast<uint32_t>(CalloutFlag::Telemetry);
     const QString telemetry_message =
         tr("<a href='https://citra-emu.org/entry/telemetry-and-why-thats-a-good-thing/'>Anonymous "
            "data is collected</a> to help improve Citra. "
            "<br/><br/>Would you like to share your usage data with us?");
     if (QMessageBox::question(this, tr("Telemetry"), telemetry_message) != QMessageBox::Yes) {
-        Settings::values.enable_telemetry = false;
+        NetSettings::values.enable_telemetry = false;
         Settings::Apply();
     }
 }
@@ -137,7 +148,7 @@ const int GMainWindow::max_recent_files_item;
 
 static void InitializeLogging() {
     Log::Filter log_filter;
-    log_filter.ParseFilterString(Settings::values.log_filter);
+    log_filter.ParseFilterString(Settings::values.log_filter.GetValue());
     Log::SetGlobalFilter(log_filter);
 
     const std::string& log_dir = FileUtil::GetUserPath(FileUtil::UserPath::LogDir);
@@ -149,8 +160,8 @@ static void InitializeLogging() {
 }
 
 GMainWindow::GMainWindow()
-    : config(std::make_unique<Config>()), emu_thread(nullptr),
-      ui(std::make_unique<Ui::MainWindow>()) {
+    : ui{std::make_unique<Ui::MainWindow>()}, config{std::make_unique<Config>()}, emu_thread{
+                                                                                      nullptr} {
     InitializeLogging();
     Debugger::ToggleConsole();
     Settings::LogSettings();
@@ -169,10 +180,14 @@ GMainWindow::GMainWindow()
     default_theme_paths = QIcon::themeSearchPaths();
     UpdateUITheme();
 
-    SetDiscordEnabled(UISettings::values.enable_discord_presence);
+    SetDiscordEnabled(UISettings::values.enable_discord_presence.GetValue());
     discord_rpc->Update();
 
     Network::Init();
+
+    Core::Movie::GetInstance().SetPlaybackCompletionCallback([this] {
+        QMetaObject::invokeMethod(this, "OnMoviePlaybackCompleted", Qt::BlockingQueuedConnection);
+    });
 
     InitializeWidgets();
     InitializeDebugWidgets();
@@ -190,9 +205,26 @@ GMainWindow::GMainWindow()
     LOG_INFO(Frontend, "Citra Version: {} | {}-{}", Common::g_build_fullname, Common::g_scm_branch,
              Common::g_scm_desc);
 #ifdef ARCHITECTURE_x86_64
-    LOG_INFO(Frontend, "Host CPU: {}", Common::GetCPUCaps().cpu_string);
+    const auto& caps = Common::GetCPUCaps();
+    std::string cpu_string = caps.cpu_string;
+    if (caps.avx || caps.avx2 || caps.avx512) {
+        cpu_string += " | AVX";
+        if (caps.avx512) {
+            cpu_string += "512";
+        } else if (caps.avx2) {
+            cpu_string += '2';
+        }
+        if (caps.fma || caps.fma4) {
+            cpu_string += " | FMA";
+        }
+    }
+    LOG_INFO(Frontend, "Host CPU: {}", cpu_string);
 #endif
     LOG_INFO(Frontend, "Host OS: {}", QSysInfo::prettyProductName().toStdString());
+    const auto& mem_info = Common::GetMemInfo();
+    using namespace Common::Literals;
+    LOG_INFO(Frontend, "Host RAM: {:.2f} GiB", mem_info.total_physical_memory / f64{1_GiB});
+    LOG_INFO(Frontend, "Host Swap: {:.2f} GiB", mem_info.total_swap_memory / f64{1_GiB});
     UpdateWindowTitle();
 
     show();
@@ -230,8 +262,11 @@ void GMainWindow::InitializeWidgets() {
 #ifdef CITRA_ENABLE_COMPATIBILITY_REPORTING
     ui->action_Report_Compatibility->setVisible(true);
 #endif
-    render_window = new GRenderWindow(this, emu_thread.get());
+    render_window = new GRenderWindow(this, emu_thread.get(), false);
+    secondary_window = new GRenderWindow(this, emu_thread.get(), true);
     render_window->hide();
+    secondary_window->hide();
+    secondary_window->setParent(nullptr);
 
     game_list = new GameList(this);
     ui->horizontalLayout->addWidget(game_list);
@@ -243,7 +278,7 @@ void GMainWindow::InitializeWidgets() {
     loading_screen = new LoadingScreen(this);
     loading_screen->hide();
     ui->horizontalLayout->addWidget(loading_screen);
-    connect(loading_screen, &LoadingScreen::Hidden, [&] {
+    connect(loading_screen, &LoadingScreen::Hidden, this, [&] {
         loading_screen->Clear();
         if (emulation_running) {
             render_window->show();
@@ -251,6 +286,7 @@ void GMainWindow::InitializeWidgets() {
         }
     });
 
+    InputCommon::Init();
     multiplayer_state = new MultiplayerState(this, game_list->GetModel(), ui->action_Leave_Room,
                                              ui->action_Show_Room);
     multiplayer_state->setVisible(false);
@@ -301,6 +337,7 @@ void GMainWindow::InitializeWidgets() {
     actionGroup_ScreenLayouts->addAction(ui->action_Screen_Layout_Single_Screen);
     actionGroup_ScreenLayouts->addAction(ui->action_Screen_Layout_Large_Screen);
     actionGroup_ScreenLayouts->addAction(ui->action_Screen_Layout_Side_by_Side);
+    actionGroup_ScreenLayouts->addAction(ui->action_Screen_Layout_Separate_Windows);
 }
 
 void GMainWindow::InitializeDebugWidgets() {
@@ -412,13 +449,13 @@ void GMainWindow::InitializeSaveStateMenuActions() {
         ui->menu_Save_State->addAction(actions_save_state[i]);
     }
 
-    connect(ui->action_Load_from_Newest_Slot, &QAction::triggered, [this] {
+    connect(ui->action_Load_from_Newest_Slot, &QAction::triggered, this, [this] {
         UpdateSaveStates();
         if (newest_slot != 0) {
             actions_load_state[newest_slot - 1]->trigger();
         }
     });
-    connect(ui->action_Save_to_Oldest_Slot, &QAction::triggered, [this] {
+    connect(ui->action_Save_to_Oldest_Slot, &QAction::triggered, this, [this] {
         UpdateSaveStates();
         actions_save_state[oldest_slot - 1]->trigger();
     });
@@ -441,6 +478,9 @@ void GMainWindow::InitializeHotkeys() {
     const QString toggle_filter_bar = QStringLiteral("Toggle Filter Bar");
     const QString toggle_status_bar = QStringLiteral("Toggle Status Bar");
     const QString fullscreen = QStringLiteral("Fullscreen");
+    const QString toggle_screen_layout = QStringLiteral("Toggle Screen Layout");
+    const QString swap_screens = QStringLiteral("Swap Screens");
+    const QString rotate_screens = QStringLiteral("Rotate Screens Upright");
 
     ui->action_Show_Filter_Bar->setShortcut(
         hotkey_registry.GetKeySequence(main_window, toggle_filter_bar));
@@ -478,18 +518,40 @@ void GMainWindow::InitializeHotkeys() {
                     return;
                 BootGame(QString(game_path));
             });
-    connect(hotkey_registry.GetHotkey(main_window, QStringLiteral("Swap Screens"), render_window),
+    connect(hotkey_registry.GetHotkey(main_window, swap_screens, render_window),
             &QShortcut::activated, ui->action_Screen_Layout_Swap_Screens, &QAction::trigger);
-    connect(hotkey_registry.GetHotkey(main_window, QStringLiteral("Rotate Screens Upright"),
-                                      render_window),
+    connect(hotkey_registry.GetHotkey(main_window, rotate_screens, render_window),
             &QShortcut::activated, ui->action_Screen_Layout_Upright_Screens, &QAction::trigger);
-    connect(hotkey_registry.GetHotkey(main_window, QStringLiteral("Toggle Screen Layout"),
-                                      render_window),
+    connect(hotkey_registry.GetHotkey(main_window, toggle_screen_layout, render_window),
             &QShortcut::activated, this, &GMainWindow::ToggleScreenLayout);
     connect(hotkey_registry.GetHotkey(main_window, fullscreen, render_window),
             &QShortcut::activated, ui->action_Fullscreen, &QAction::trigger);
     connect(hotkey_registry.GetHotkey(main_window, fullscreen, render_window),
             &QShortcut::activatedAmbiguously, ui->action_Fullscreen, &QAction::trigger);
+
+    const auto add_secondary_window_hotkey = [this](QKeySequence hotkey, const char* slot) {
+        // This action will fire specifically when secondary_window is in focus
+        QAction* secondary_window_action = new QAction(secondary_window);
+        secondary_window_action->setShortcut(hotkey);
+
+        connect(secondary_window_action, SIGNAL(triggered()), this, slot);
+        secondary_window->addAction(secondary_window_action);
+    };
+
+    // Use the same fullscreen hotkey as the main window
+    const auto fullscreen_hotkey = hotkey_registry.GetKeySequence(main_window, fullscreen);
+    add_secondary_window_hotkey(fullscreen_hotkey, SLOT(ToggleSecondaryFullscreen()));
+
+    const auto toggle_screen_hotkey =
+        hotkey_registry.GetKeySequence(main_window, toggle_screen_layout);
+    add_secondary_window_hotkey(toggle_screen_hotkey, SLOT(ToggleScreenLayout()));
+
+    const auto swap_screen_hotkey = hotkey_registry.GetKeySequence(main_window, swap_screens);
+    add_secondary_window_hotkey(swap_screen_hotkey, SLOT(TriggerSwapScreens()));
+
+    const auto rotate_screen_hotkey = hotkey_registry.GetKeySequence(main_window, rotate_screens);
+    add_secondary_window_hotkey(rotate_screen_hotkey, SLOT(TriggerRotateScreens()));
+
     connect(hotkey_registry.GetHotkey(main_window, QStringLiteral("Exit Fullscreen"), this),
             &QShortcut::activated, this, [&] {
                 if (emulation_running) {
@@ -499,8 +561,7 @@ void GMainWindow::InitializeHotkeys() {
             });
     connect(hotkey_registry.GetHotkey(main_window, QStringLiteral("Toggle Alternate Speed"), this),
             &QShortcut::activated, this, [&] {
-                Settings::values.use_frame_limit_alternate =
-                    !Settings::values.use_frame_limit_alternate;
+                Settings::values.frame_limit.SetGlobal(!Settings::values.frame_limit.UsingGlobal());
                 UpdateStatusBar();
             });
     connect(hotkey_registry.GetHotkey(main_window, QStringLiteral("Toggle Texture Dumping"), this),
@@ -511,42 +572,25 @@ void GMainWindow::InitializeHotkeys() {
     static constexpr u16 SPEED_LIMIT_STEP = 5;
     connect(hotkey_registry.GetHotkey(main_window, QStringLiteral("Increase Speed Limit"), this),
             &QShortcut::activated, this, [&] {
-                if (Settings::values.use_frame_limit_alternate) {
-                    if (Settings::values.frame_limit_alternate == 0) {
-                        return;
-                    }
-                    if (Settings::values.frame_limit_alternate < 995 - SPEED_LIMIT_STEP) {
-                        Settings::values.frame_limit_alternate += SPEED_LIMIT_STEP;
-                    } else {
-                        Settings::values.frame_limit_alternate = 0;
-                    }
+                if (Settings::values.frame_limit.GetValue() == 0) {
+                    return;
+                }
+                if (Settings::values.frame_limit.GetValue() < 995 - SPEED_LIMIT_STEP) {
+                    Settings::values.frame_limit.SetValue(Settings::values.frame_limit.GetValue() +
+                                                          SPEED_LIMIT_STEP);
                 } else {
-                    if (Settings::values.frame_limit == 0) {
-                        return;
-                    }
-                    if (Settings::values.frame_limit < 995 - SPEED_LIMIT_STEP) {
-                        Settings::values.frame_limit += SPEED_LIMIT_STEP;
-                    } else {
-                        Settings::values.frame_limit = 0;
-                    }
+                    Settings::values.frame_limit = 0;
                 }
                 UpdateStatusBar();
             });
     connect(hotkey_registry.GetHotkey(main_window, QStringLiteral("Decrease Speed Limit"), this),
             &QShortcut::activated, this, [&] {
-                if (Settings::values.use_frame_limit_alternate) {
-                    if (Settings::values.frame_limit_alternate == 0) {
-                        Settings::values.frame_limit_alternate = 995;
-                    } else if (Settings::values.frame_limit_alternate > SPEED_LIMIT_STEP) {
-                        Settings::values.frame_limit_alternate -= SPEED_LIMIT_STEP;
-                    }
-                } else {
-                    if (Settings::values.frame_limit == 0) {
-                        Settings::values.frame_limit = 995;
-                    } else if (Settings::values.frame_limit > SPEED_LIMIT_STEP) {
-                        Settings::values.frame_limit -= SPEED_LIMIT_STEP;
-                        UpdateStatusBar();
-                    }
+                if (Settings::values.frame_limit.GetValue() == 0) {
+                    Settings::values.frame_limit = 995;
+                } else if (Settings::values.frame_limit.GetValue() > SPEED_LIMIT_STEP) {
+                    Settings::values.frame_limit.SetValue(Settings::values.frame_limit.GetValue() -
+                                                          SPEED_LIMIT_STEP);
+                    UpdateStatusBar();
                 }
                 UpdateStatusBar();
             });
@@ -568,7 +612,7 @@ void GMainWindow::InitializeHotkeys() {
             });
     connect(hotkey_registry.GetHotkey(main_window, QStringLiteral("Capture Screenshot"), this),
             &QShortcut::activated, this, [&] {
-                if (emu_thread->IsRunning()) {
+                if (ui->action_Capture_Screenshot->isEnabled()) {
                     OnCaptureScreenshot();
                 }
             });
@@ -576,6 +620,9 @@ void GMainWindow::InitializeHotkeys() {
             &QShortcut::activated, ui->action_Load_from_Newest_Slot, &QAction::trigger);
     connect(hotkey_registry.GetHotkey(main_window, QStringLiteral("Save to Oldest Slot"), this),
             &QShortcut::activated, ui->action_Save_to_Oldest_Slot, &QAction::trigger);
+    connect(hotkey_registry.GetHotkey(main_window, QStringLiteral("Mute Audio"), this),
+            &QShortcut::activated, this,
+            [] { Settings::values.audio_muted = !Settings::values.audio_muted; });
 }
 
 void GMainWindow::ShowUpdaterWidgets() {
@@ -603,25 +650,26 @@ void GMainWindow::RestoreUIState() {
     render_window->restoreGeometry(UISettings::values.renderwindow_geometry);
 #if MICROPROFILE_ENABLED
     microProfileDialog->restoreGeometry(UISettings::values.microprofile_geometry);
-    microProfileDialog->setVisible(UISettings::values.microprofile_visible);
+    microProfileDialog->setVisible(UISettings::values.microprofile_visible.GetValue());
 #endif
     ui->action_Cheats->setEnabled(false);
 
     game_list->LoadInterfaceLayout();
 
-    ui->action_Single_Window_Mode->setChecked(UISettings::values.single_window_mode);
+    ui->action_Single_Window_Mode->setChecked(UISettings::values.single_window_mode.GetValue());
     ToggleWindowMode();
 
-    ui->action_Fullscreen->setChecked(UISettings::values.fullscreen);
+    ui->action_Fullscreen->setChecked(UISettings::values.fullscreen.GetValue());
     SyncMenuUISettings();
 
-    ui->action_Display_Dock_Widget_Headers->setChecked(UISettings::values.display_titlebar);
+    ui->action_Display_Dock_Widget_Headers->setChecked(
+        UISettings::values.display_titlebar.GetValue());
     OnDisplayTitleBars(ui->action_Display_Dock_Widget_Headers->isChecked());
 
-    ui->action_Show_Filter_Bar->setChecked(UISettings::values.show_filter_bar);
+    ui->action_Show_Filter_Bar->setChecked(UISettings::values.show_filter_bar.GetValue());
     game_list->SetFilterVisible(ui->action_Show_Filter_Bar->isChecked());
 
-    ui->action_Show_Status_Bar->setChecked(UISettings::values.show_status_bar);
+    ui->action_Show_Status_Bar->setChecked(UISettings::values.show_status_bar.GetValue());
     statusBar()->setVisible(ui->action_Show_Status_Bar->isChecked());
 }
 
@@ -654,12 +702,19 @@ void GMainWindow::ConnectWidgetEvents() {
     connect(game_list_placeholder, &GameListPlaceholder::AddDirectory, this,
             &GMainWindow::OnGameListAddDirectory);
     connect(game_list, &GameList::ShowList, this, &GMainWindow::OnGameListShowList);
-    connect(game_list, &GameList::PopulatingCompleted,
+    connect(game_list, &GameList::PopulatingCompleted, this,
             [this] { multiplayer_state->UpdateGameList(game_list->GetModel()); });
+
+    connect(game_list, &GameList::OpenPerGameGeneralRequested, this,
+            &GMainWindow::OnGameListOpenPerGameProperties);
 
     connect(this, &GMainWindow::EmulationStarting, render_window,
             &GRenderWindow::OnEmulationStarting);
     connect(this, &GMainWindow::EmulationStopping, render_window,
+            &GRenderWindow::OnEmulationStopping);
+    connect(this, &GMainWindow::EmulationStarting, secondary_window,
+            &GRenderWindow::OnEmulationStarting);
+    connect(this, &GMainWindow::EmulationStopping, secondary_window,
             &GRenderWindow::OnEmulationStopping);
 
     connect(&status_bar_update_timer, &QTimer::timeout, this, &GMainWindow::UpdateStatusBar);
@@ -688,6 +743,8 @@ void GMainWindow::ConnectMenuEvents() {
     connect(ui->action_Report_Compatibility, &QAction::triggered, this,
             &GMainWindow::OnMenuReportCompatibility);
     connect(ui->action_Configure, &QAction::triggered, this, &GMainWindow::OnConfigure);
+    connect(ui->action_Configure_Current_Game, &QAction::triggered, this,
+            &GMainWindow::OnConfigurePerGame);
     connect(ui->action_Cheats, &QAction::triggered, this, &GMainWindow::OnCheats);
 
     // View
@@ -734,6 +791,8 @@ void GMainWindow::ConnectMenuEvents() {
             &GMainWindow::ChangeScreenLayout);
     connect(ui->action_Screen_Layout_Side_by_Side, &QAction::triggered, this,
             &GMainWindow::ChangeScreenLayout);
+    connect(ui->action_Screen_Layout_Separate_Windows, &QAction::triggered, this,
+            &GMainWindow::ChangeScreenLayout);
     connect(ui->action_Screen_Layout_Swap_Screens, &QAction::triggered, this,
             &GMainWindow::OnSwapScreens);
     connect(ui->action_Screen_Layout_Upright_Screens, &QAction::triggered, this,
@@ -742,8 +801,10 @@ void GMainWindow::ConnectMenuEvents() {
     // Movie
     connect(ui->action_Record_Movie, &QAction::triggered, this, &GMainWindow::OnRecordMovie);
     connect(ui->action_Play_Movie, &QAction::triggered, this, &GMainWindow::OnPlayMovie);
-    connect(ui->action_Stop_Recording_Playback, &QAction::triggered, this,
-            &GMainWindow::OnStopRecordingPlayback);
+    connect(ui->action_Close_Movie, &QAction::triggered, this, &GMainWindow::OnCloseMovie);
+    connect(ui->action_Save_Movie, &QAction::triggered, this, &GMainWindow::OnSaveMovie);
+    connect(ui->action_Movie_Read_Only_Mode, &QAction::toggled, this,
+            [](bool checked) { Core::Movie::GetInstance().SetReadOnly(checked); });
     connect(ui->action_Enable_Frame_Advancing, &QAction::triggered, this, [this] {
         if (emulation_running) {
             Core::System::GetInstance().frame_limiter.SetFrameAdvancing(
@@ -891,21 +952,23 @@ bool GMainWindow::LoadROM(const QString& filename) {
         ShutdownGame();
 
     render_window->InitRenderTarget();
+    secondary_window->InitRenderTarget();
 
     Frontend::ScopeAcquireContext scope(*render_window);
 
-    const QString below_gl33_title = tr("OpenGL 3.3 Unsupported");
-    const QString below_gl33_message = tr("Your GPU may not support OpenGL 3.3, or you do not "
+    const QString below_gl43_title = tr("OpenGL 4.3 Unsupported");
+    const QString below_gl43_message = tr("Your GPU may not support OpenGL 4.3, or you do not "
                                           "have the latest graphics driver.");
 
-    if (!QOpenGLContext::globalShareContext()->versionFunctions<QOpenGLFunctions_3_3_Core>()) {
-        QMessageBox::critical(this, below_gl33_title, below_gl33_message);
+    if (!QOpenGLContext::globalShareContext()->versionFunctions<QOpenGLFunctions_4_3_Core>()) {
+        QMessageBox::critical(this, below_gl43_title, below_gl43_message);
         return false;
     }
 
     Core::System& system{Core::System::GetInstance()};
 
-    const Core::System::ResultStatus result{system.Load(*render_window, filename.toStdString())};
+    const Core::System::ResultStatus result{
+        system.Load(*render_window, filename.toStdString(), secondary_window)};
 
     if (result != Core::System::ResultStatus::Success) {
         switch (result) {
@@ -969,8 +1032,8 @@ bool GMainWindow::LoadROM(const QString& filename) {
                    "proper drivers for your graphics card from the manufacturer's website."));
             break;
 
-        case Core::System::ResultStatus::ErrorVideoCore_ErrorBelowGL33:
-            QMessageBox::critical(this, below_gl33_title, below_gl33_message);
+        case Core::System::ResultStatus::ErrorVideoCore_ErrorBelowGL43:
+            QMessageBox::critical(this, below_gl43_title, below_gl43_message);
             break;
 
         default:
@@ -989,7 +1052,7 @@ bool GMainWindow::LoadROM(const QString& filename) {
 
     game_path = filename;
 
-    system.TelemetrySession().AddField(Telemetry::FieldType::App, "Frontend", "Qt");
+    system.TelemetrySession().AddField(Common::Telemetry::FieldType::App, "Frontend", "Qt");
     return true;
 }
 
@@ -1012,6 +1075,25 @@ void GMainWindow::BootGame(const QString& filename) {
     if (movie_record_on_start) {
         Core::Movie::GetInstance().PrepareForRecording();
     }
+    if (movie_playback_on_start) {
+        Core::Movie::GetInstance().PrepareForPlayback(movie_playback_path.toStdString());
+    }
+
+    u64 title_id{0};
+    const std::string path = filename.toStdString();
+    const auto loader = Loader::GetLoader(path);
+
+    if (loader != nullptr && loader->ReadProgramId(title_id) == Loader::ResultStatus::Success) {
+        // Load per game settings
+        const std::string name{FileUtil::GetFilename(filename.toStdString())};
+        const std::string config_file_name =
+            title_id == 0 ? name : fmt::format("{:016X}", title_id);
+        Config per_game_config(config_file_name, Config::ConfigType::PerGameConfig);
+        Settings::Apply();
+
+        LOG_INFO(Frontend, "Using per game config file for title id {}", config_file_name);
+        Settings::LogSettings();
+    }
 
     // Save configurations
     UpdateUISettings();
@@ -1021,6 +1103,42 @@ void GMainWindow::BootGame(const QString& filename) {
     if (!LoadROM(filename))
         return;
 
+    // Set everything up
+    if (movie_record_on_start) {
+        Core::Movie::GetInstance().StartRecording(movie_record_path.toStdString(),
+                                                  movie_record_author.toStdString());
+        movie_record_on_start = false;
+        movie_record_path.clear();
+        movie_record_author.clear();
+    }
+    if (movie_playback_on_start) {
+        Core::Movie::GetInstance().StartPlayback(movie_playback_path.toStdString());
+        movie_playback_on_start = false;
+        movie_playback_path.clear();
+    }
+
+    if (ui->action_Enable_Frame_Advancing->isChecked()) {
+        ui->action_Advance_Frame->setEnabled(true);
+        Core::System::GetInstance().frame_limiter.SetFrameAdvancing(true);
+    } else {
+        ui->action_Advance_Frame->setEnabled(false);
+    }
+
+    if (video_dumping_on_start) {
+        Layout::FramebufferLayout layout{
+            Layout::FrameLayoutFromResolutionScale(VideoCore::GetResolutionScaleFactor())};
+        if (!Core::System::GetInstance().VideoDumper().StartDumping(
+                video_dumping_path.toStdString(), layout)) {
+
+            QMessageBox::critical(
+                this, tr("Citra"),
+                tr("Could not start video dumping.<br>Refer to the log for details."));
+            ui->action_Dump_Video->setChecked(false);
+        }
+        video_dumping_on_start = false;
+        video_dumping_path.clear();
+    }
+
     // Create and start the emulation thread
     emu_thread = std::make_unique<EmuThread>(*render_window);
     emit EmulationStarting(emu_thread.get());
@@ -1028,6 +1146,8 @@ void GMainWindow::BootGame(const QString& filename) {
 
     connect(render_window, &GRenderWindow::Closed, this, &GMainWindow::OnStopGame);
     connect(render_window, &GRenderWindow::MouseActivity, this, &GMainWindow::OnMouseActivity);
+    connect(secondary_window, &GRenderWindow::Closed, this, &GMainWindow::OnStopGame);
+    connect(secondary_window, &GRenderWindow::MouseActivity, this, &GMainWindow::OnMouseActivity);
 
     // BlockingQueuedConnection is important here, it makes sure we've finished refreshing our views
     // before the CPU continues
@@ -1042,6 +1162,8 @@ void GMainWindow::BootGame(const QString& filename) {
 
     connect(emu_thread.get(), &EmuThread::LoadProgress, loading_screen,
             &LoadingScreen::OnLoadProgress, Qt::QueuedConnection);
+    connect(emu_thread.get(), &EmuThread::HideLoadingScreen, loading_screen,
+            &LoadingScreen::OnLoadComplete);
 
     // Update the GUI
     registersWidget->OnDebugModeEntered();
@@ -1049,7 +1171,7 @@ void GMainWindow::BootGame(const QString& filename) {
         game_list->hide();
         game_list_placeholder->hide();
     }
-    status_bar_update_timer.start(2000);
+    status_bar_update_timer.start(1000);
 
     if (UISettings::values.hide_mouse) {
         mouse_hide_timer.start();
@@ -1068,20 +1190,6 @@ void GMainWindow::BootGame(const QString& filename) {
         ShowFullscreen();
     }
 
-    if (video_dumping_on_start) {
-        Layout::FramebufferLayout layout{
-            Layout::FrameLayoutFromResolutionScale(VideoCore::GetResolutionScaleFactor())};
-        if (!Core::System::GetInstance().VideoDumper().StartDumping(
-                video_dumping_path.toStdString(), layout)) {
-
-            QMessageBox::critical(
-                this, tr("Citra"),
-                tr("Could not start video dumping.<br>Refer to the log for details."));
-            ui->action_Dump_Video->setChecked(false);
-        }
-        video_dumping_on_start = false;
-        video_dumping_path.clear();
-    }
     OnStartGame();
 }
 
@@ -1105,7 +1213,6 @@ void GMainWindow::ShutdownGame() {
     AllowOSSleep();
 
     discord_rpc->Pause();
-    OnStopRecordingPlayback();
     emu_thread->RequestStop();
 
     // Release emu threads from any breakpoints
@@ -1124,12 +1231,15 @@ void GMainWindow::ShutdownGame() {
     emu_thread->wait();
     emu_thread = nullptr;
 
+    OnCloseMovie();
+
     discord_rpc->Update();
 
     Camera::QtMultimediaCameraHandler::ReleaseHandlers();
 
     // The emulation is stopped, so closing the window or not does not matter anymore
     disconnect(render_window, &GRenderWindow::Closed, this, &GMainWindow::OnStopGame);
+    disconnect(secondary_window, &GRenderWindow::Closed, this, &GMainWindow::OnStopGame);
 
     // Update the GUI
     ui->action_Start->setEnabled(false);
@@ -1138,14 +1248,14 @@ void GMainWindow::ShutdownGame() {
     ui->action_Stop->setEnabled(false);
     ui->action_Restart->setEnabled(false);
     ui->action_Cheats->setEnabled(false);
+    ui->action_Configure_Current_Game->setEnabled(false);
     ui->action_Load_Amiibo->setEnabled(false);
     ui->action_Remove_Amiibo->setEnabled(false);
     ui->action_Report_Compatibility->setEnabled(false);
-    ui->action_Enable_Frame_Advancing->setEnabled(false);
-    ui->action_Enable_Frame_Advancing->setChecked(false);
     ui->action_Advance_Frame->setEnabled(false);
     ui->action_Capture_Screenshot->setEnabled(false);
     render_window->hide();
+    secondary_window->hide();
     loading_screen->hide();
     loading_screen->Clear();
     if (game_list->IsEmpty())
@@ -1159,6 +1269,7 @@ void GMainWindow::ShutdownGame() {
     // Disable status bar updates
     status_bar_update_timer.stop();
     message_label->setVisible(false);
+    message_label_used_for_movie = false;
     emu_speed_label->setVisible(false);
     game_fps_label->setVisible(false);
     emu_frametime_label->setVisible(false);
@@ -1178,6 +1289,7 @@ void GMainWindow::ShutdownGame() {
 
     // When closing the game, destroy the GLWindow to clear the context after the game is closed
     render_window->ReleaseRenderTarget();
+    secondary_window->ReleaseRenderTarget();
 }
 
 void GMainWindow::StoreRecentFile(const QString& filename) {
@@ -1268,7 +1380,9 @@ void GMainWindow::UpdateSaveStates() {
 }
 
 void GMainWindow::OnGameListLoadFile(QString game_path) {
-    BootGame(game_path);
+    if (ConfirmChangeGame()) {
+        BootGame(game_path);
+    }
 }
 
 void GMainWindow::OnGameListOpenFolder(u64 data_id, GameListOpenTarget target) {
@@ -1294,26 +1408,42 @@ void GMainWindow::OnGameListOpenFolder(u64 data_id, GameListOpenTarget target) {
         path = Service::AM::GetTitlePath(media_type, data_id) + "content/";
         break;
     }
-    case GameListOpenTarget::UPDATE_DATA:
+    case GameListOpenTarget::UPDATE_DATA: {
         open_target = "Update Data";
         path = Service::AM::GetTitlePath(Service::FS::MediaType::SDMC, data_id + 0xe00000000) +
                "content/";
         break;
-    case GameListOpenTarget::TEXTURE_DUMP:
+    }
+    case GameListOpenTarget::TEXTURE_DUMP: {
         open_target = "Dumped Textures";
         path = fmt::format("{}textures/{:016X}/",
                            FileUtil::GetUserPath(FileUtil::UserPath::DumpDir), data_id);
         break;
-    case GameListOpenTarget::TEXTURE_LOAD:
+    }
+    case GameListOpenTarget::TEXTURE_LOAD: {
         open_target = "Custom Textures";
         path = fmt::format("{}textures/{:016X}/",
                            FileUtil::GetUserPath(FileUtil::UserPath::LoadDir), data_id);
         break;
-    case GameListOpenTarget::MODS:
+    }
+    case GameListOpenTarget::MODS: {
         open_target = "Mods";
         path = fmt::format("{}mods/{:016X}/", FileUtil::GetUserPath(FileUtil::UserPath::LoadDir),
                            data_id);
         break;
+    }
+    case GameListOpenTarget::DLC_DATA: {
+        open_target = "DLC Data";
+        path = fmt::format("{}Nintendo 3DS/00000000000000000000000000000000/"
+                           "00000000000000000000000000000000/title/0004008c/{:08x}/content/",
+                           FileUtil::GetUserPath(FileUtil::UserPath::SDMCDir), data_id);
+        break;
+    }
+    case GameListOpenTarget::SHADER_CACHE: {
+        open_target = "Shader Cache";
+        path = FileUtil::GetUserPath(FileUtil::UserPath::ShaderDir);
+        break;
+    }
     default:
         LOG_ERROR(Frontend, "Unexpected target {}", static_cast<int>(target));
         return;
@@ -1361,7 +1491,7 @@ void GMainWindow::OnGameListDumpRomFS(QString game_path, u64 program_id) {
                     program_id | 0x0004000e00000000);
     using FutureWatcher = QFutureWatcher<std::pair<Loader::ResultStatus, Loader::ResultStatus>>;
     auto* future_watcher = new FutureWatcher(this);
-    connect(future_watcher, &FutureWatcher::finished,
+    connect(future_watcher, &FutureWatcher::finished, this,
             [this, dialog, base_path, update_path, future_watcher] {
                 dialog->hide();
                 const auto& [base, update] = future_watcher->result();
@@ -1425,6 +1555,19 @@ void GMainWindow::OnGameListShowList(bool show) {
     game_list_placeholder->setVisible(!show);
 };
 
+void GMainWindow::OnGameListOpenPerGameProperties(const QString& file) {
+    const auto loader = Loader::GetLoader(file.toStdString());
+
+    u64 title_id{};
+    if (!loader || loader->ReadProgramId(title_id) != Loader::ResultStatus::Success) {
+        QMessageBox::information(this, tr("Properties"),
+                                 tr("The game properties could not be loaded."));
+        return;
+    }
+
+    OpenPerGameConfiguration(title_id, file);
+}
+
 void GMainWindow::OnMenuLoadFile() {
     const QString extensions = QStringLiteral("*.").append(
         GameList::supported_file_extensions.join(QStringLiteral(" *.")));
@@ -1459,12 +1602,11 @@ void GMainWindow::InstallCIA(QStringList filepaths) {
     progress_bar->setMaximum(INT_MAX);
 
     QtConcurrent::run([&, filepaths] {
-        QString current_path;
         Service::AM::InstallStatus status;
         const auto cia_progress = [&](std::size_t written, std::size_t total) {
             emit UpdateProgress(written, total);
         };
-        for (const auto current_path : filepaths) {
+        for (const auto& current_path : filepaths) {
             status = Service::AM::InstallCIA(current_path.toStdString(), cia_progress);
             emit CIAInstallReport(status, current_path);
         }
@@ -1502,6 +1644,10 @@ void GMainWindow::OnCIAInstallReport(Service::AM::InstallStatus status, QString 
                                  "before being used with Citra. A real 3DS is required.")
                                   .arg(filename));
         break;
+    case Service::AM::InstallStatus::ErrorFileNotFound:
+        QMessageBox::critical(this, tr("Unable to find File"),
+                              tr("Could not find %1").arg(filename));
+        break;
     }
 }
 
@@ -1533,12 +1679,6 @@ void GMainWindow::OnMenuRecentFile() {
 void GMainWindow::OnStartGame() {
     Camera::QtMultimediaCameraHandler::ResumeCameras();
 
-    if (movie_record_on_start) {
-        Core::Movie::GetInstance().StartRecording(movie_record_path.toStdString());
-        movie_record_on_start = false;
-        movie_record_path.clear();
-    }
-
     PreventOSSleep();
 
     emu_thread->SetRunning(true);
@@ -1553,9 +1693,9 @@ void GMainWindow::OnStartGame() {
     ui->action_Stop->setEnabled(true);
     ui->action_Restart->setEnabled(true);
     ui->action_Cheats->setEnabled(true);
+    ui->action_Configure_Current_Game->setEnabled(true);
     ui->action_Load_Amiibo->setEnabled(true);
     ui->action_Report_Compatibility->setEnabled(true);
-    ui->action_Enable_Frame_Advancing->setEnabled(true);
     ui->action_Capture_Screenshot->setEnabled(true);
 
     discord_rpc->Update();
@@ -1576,14 +1716,16 @@ void GMainWindow::OnPauseGame() {
 
 void GMainWindow::OnStopGame() {
     ShutdownGame();
+    Settings::RestoreGlobalState(false);
 }
 
 void GMainWindow::OnLoadComplete() {
     loading_screen->OnLoadComplete();
+    UpdateSecondaryWindowVisibility();
 }
 
 void GMainWindow::OnMenuReportCompatibility() {
-    if (!Settings::values.citra_token.empty() && !Settings::values.citra_username.empty()) {
+    if (!NetSettings::values.citra_token.empty() && !NetSettings::values.citra_username.empty()) {
         CompatDB compatdb{this};
         compatdb.exec();
     } else {
@@ -1601,6 +1743,17 @@ void GMainWindow::ToggleFullscreen() {
         ShowFullscreen();
     } else {
         HideFullscreen();
+    }
+}
+
+void GMainWindow::ToggleSecondaryFullscreen() {
+    if (!emulation_running) {
+        return;
+    }
+    if (secondary_window->isFullScreen()) {
+        secondary_window->showNormal();
+    } else {
+        secondary_window->showFullScreen();
     }
 }
 
@@ -1653,6 +1806,19 @@ void GMainWindow::ToggleWindowMode() {
     }
 }
 
+void GMainWindow::UpdateSecondaryWindowVisibility() {
+    if (!emulation_running) {
+        return;
+    }
+    if (Settings::values.layout_option.GetValue() == Settings::LayoutOption::SeparateWindows) {
+        secondary_window->RestoreGeometry();
+        secondary_window->show();
+    } else {
+        secondary_window->BackupGeometry();
+        secondary_window->hide();
+    }
+}
+
 void GMainWindow::ChangeScreenLayout() {
     Settings::LayoutOption new_layout = Settings::LayoutOption::Default;
 
@@ -1664,33 +1830,39 @@ void GMainWindow::ChangeScreenLayout() {
         new_layout = Settings::LayoutOption::LargeScreen;
     } else if (ui->action_Screen_Layout_Side_by_Side->isChecked()) {
         new_layout = Settings::LayoutOption::SideScreen;
+    } else if (ui->action_Screen_Layout_Separate_Windows->isChecked()) {
+        new_layout = Settings::LayoutOption::SeparateWindows;
     }
 
     Settings::values.layout_option = new_layout;
     Settings::Apply();
+    UpdateSecondaryWindowVisibility();
 }
 
 void GMainWindow::ToggleScreenLayout() {
-    Settings::LayoutOption new_layout = Settings::LayoutOption::Default;
-
-    switch (Settings::values.layout_option) {
-    case Settings::LayoutOption::Default:
-        new_layout = Settings::LayoutOption::SingleScreen;
-        break;
-    case Settings::LayoutOption::SingleScreen:
-        new_layout = Settings::LayoutOption::LargeScreen;
-        break;
-    case Settings::LayoutOption::LargeScreen:
-        new_layout = Settings::LayoutOption::SideScreen;
-        break;
-    case Settings::LayoutOption::SideScreen:
-        new_layout = Settings::LayoutOption::Default;
-        break;
-    }
+    const Settings::LayoutOption new_layout = []() {
+        switch (Settings::values.layout_option.GetValue()) {
+        case Settings::LayoutOption::Default:
+            return Settings::LayoutOption::SingleScreen;
+        case Settings::LayoutOption::SingleScreen:
+            return Settings::LayoutOption::LargeScreen;
+        case Settings::LayoutOption::LargeScreen:
+            return Settings::LayoutOption::SideScreen;
+        case Settings::LayoutOption::SideScreen:
+            return Settings::LayoutOption::SeparateWindows;
+        case Settings::LayoutOption::SeparateWindows:
+            return Settings::LayoutOption::Default;
+        default:
+            LOG_ERROR(Frontend, "Unknown layout option {}",
+                      Settings::values.layout_option.GetValue());
+            return Settings::LayoutOption::Default;
+        }
+    }();
 
     Settings::values.layout_option = new_layout;
     SyncMenuUISettings();
     Settings::Apply();
+    UpdateSecondaryWindowVisibility();
 }
 
 void GMainWindow::OnSwapScreens() {
@@ -1701,6 +1873,14 @@ void GMainWindow::OnSwapScreens() {
 void GMainWindow::OnRotateScreens() {
     Settings::values.upright_screen = ui->action_Screen_Layout_Upright_Screens->isChecked();
     Settings::Apply();
+}
+
+void GMainWindow::TriggerSwapScreens() {
+    ui->action_Screen_Layout_Swap_Screens->trigger();
+}
+
+void GMainWindow::TriggerRotateScreens() {
+    ui->action_Screen_Layout_Upright_Screens->trigger();
 }
 
 void GMainWindow::OnCheats() {
@@ -1726,6 +1906,7 @@ void GMainWindow::OnLoadState() {
 }
 
 void GMainWindow::OnConfigure() {
+    Settings::SetConfiguringGlobal(true);
     ConfigureDialog configureDialog(this, hotkey_registry,
                                     !multiplayer_state->IsHostingPublicRoom());
     connect(&configureDialog, &ConfigureDialog::LanguageChanged, this,
@@ -1734,15 +1915,15 @@ void GMainWindow::OnConfigure() {
     const int old_input_profile_index = Settings::values.current_input_profile_index;
     const auto old_input_profiles = Settings::values.input_profiles;
     const auto old_touch_from_button_maps = Settings::values.touch_from_button_maps;
-    const bool old_discord_presence = UISettings::values.enable_discord_presence;
+    const bool old_discord_presence = UISettings::values.enable_discord_presence.GetValue();
     auto result = configureDialog.exec();
     if (result == QDialog::Accepted) {
         configureDialog.ApplyConfiguration();
         InitializeHotkeys();
         if (UISettings::values.theme != old_theme)
             UpdateUITheme();
-        if (UISettings::values.enable_discord_presence != old_discord_presence)
-            SetDiscordEnabled(UISettings::values.enable_discord_presence);
+        if (UISettings::values.enable_discord_presence.GetValue() != old_discord_presence)
+            SetDiscordEnabled(UISettings::values.enable_discord_presence.GetValue());
         if (!multiplayer_state->IsHostingPublicRoom())
             multiplayer_state->UpdateCredentials();
         emit UpdateThemedIcons();
@@ -1755,6 +1936,7 @@ void GMainWindow::OnConfigure() {
         } else {
             setMouseTracking(false);
         }
+        UpdateSecondaryWindowVisibility();
     } else {
         Settings::values.input_profiles = old_input_profiles;
         Settings::values.touch_from_button_maps = old_touch_from_button_maps;
@@ -1839,159 +2021,105 @@ void GMainWindow::OnCreateGraphicsSurfaceViewer() {
 }
 
 void GMainWindow::OnRecordMovie() {
-    if (emulation_running) {
-        QMessageBox::StandardButton answer = QMessageBox::warning(
-            this, tr("Record Movie"),
-            tr("To keep consistency with the RNG, it is recommended to record the movie from game "
-               "start.<br>Are you sure you still want to record movies now?"),
-            QMessageBox::Yes | QMessageBox::No);
-        if (answer == QMessageBox::No)
-            return;
-    }
-    const QString path =
-        QFileDialog::getSaveFileName(this, tr("Record Movie"), UISettings::values.movie_record_path,
-                                     tr("Citra TAS Movie (*.ctm)"));
-    if (path.isEmpty())
+    MovieRecordDialog dialog(this);
+    if (dialog.exec() != QDialog::Accepted) {
         return;
-    UISettings::values.movie_record_path = QFileInfo(path).path();
-    if (emulation_running) {
-        Core::Movie::GetInstance().StartRecording(path.toStdString());
-    } else {
-        movie_record_on_start = true;
-        movie_record_path = path;
-        QMessageBox::information(this, tr("Record Movie"),
-                                 tr("Recording will start once you boot a game."));
     }
-    ui->action_Record_Movie->setEnabled(false);
-    ui->action_Play_Movie->setEnabled(false);
-    ui->action_Stop_Recording_Playback->setEnabled(true);
-}
 
-bool GMainWindow::ValidateMovie(const QString& path, u64 program_id) {
-    using namespace Core;
-    Movie::ValidationResult result =
-        Core::Movie::GetInstance().ValidateMovie(path.toStdString(), program_id);
-    const QString revision_dismatch_text =
-        tr("The movie file you are trying to load was created on a different revision of Citra."
-           "<br/>Citra has had some changes during the time, and the playback may desync or not "
-           "work as expected."
-           "<br/><br/>Are you sure you still want to load the movie file?");
-    const QString game_dismatch_text =
-        tr("The movie file you are trying to load was recorded with a different game."
-           "<br/>The playback may not work as expected, and it may cause unexpected results."
-           "<br/><br/>Are you sure you still want to load the movie file?");
-    const QString invalid_movie_text =
-        tr("The movie file you are trying to load is invalid."
-           "<br/>Either the file is corrupted, or Citra has had made some major changes to the "
-           "Movie module."
-           "<br/>Please choose a different movie file and try again.");
-    int answer;
-    switch (result) {
-    case Movie::ValidationResult::RevisionDismatch:
-        answer = QMessageBox::question(this, tr("Revision Dismatch"), revision_dismatch_text,
-                                       QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-        if (answer != QMessageBox::Yes)
-            return false;
-        break;
-    case Movie::ValidationResult::GameDismatch:
-        answer = QMessageBox::question(this, tr("Game Dismatch"), game_dismatch_text,
-                                       QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-        if (answer != QMessageBox::Yes)
-            return false;
-        break;
-    case Movie::ValidationResult::Invalid:
-        QMessageBox::critical(this, tr("Invalid Movie File"), invalid_movie_text);
-        return false;
-    default:
-        break;
+    movie_record_on_start = true;
+    movie_record_path = dialog.GetPath();
+    movie_record_author = dialog.GetAuthor();
+
+    if (emulation_running) { // Restart game
+        BootGame(QString(game_path));
     }
-    return true;
+    ui->action_Close_Movie->setEnabled(true);
+    ui->action_Save_Movie->setEnabled(true);
 }
 
 void GMainWindow::OnPlayMovie() {
-    if (emulation_running) {
-        QMessageBox::StandardButton answer = QMessageBox::warning(
-            this, tr("Play Movie"),
-            tr("To keep consistency with the RNG, it is recommended to play the movie from game "
-               "start.<br>Are you sure you still want to play movies now?"),
-            QMessageBox::Yes | QMessageBox::No);
-        if (answer == QMessageBox::No)
-            return;
-    }
-
-    const QString path =
-        QFileDialog::getOpenFileName(this, tr("Play Movie"), UISettings::values.movie_playback_path,
-                                     tr("Citra TAS Movie (*.ctm)"));
-    if (path.isEmpty())
+    MoviePlayDialog dialog(this, game_list);
+    if (dialog.exec() != QDialog::Accepted) {
         return;
-    UISettings::values.movie_playback_path = QFileInfo(path).path();
-
-    if (emulation_running) {
-        if (!ValidateMovie(path))
-            return;
-    } else {
-        const QString invalid_movie_text =
-            tr("The movie file you are trying to load is invalid."
-               "<br/>Either the file is corrupted, or Citra has had made some major changes to the "
-               "Movie module."
-               "<br/>Please choose a different movie file and try again.");
-        u64 program_id = Core::Movie::GetInstance().GetMovieProgramID(path.toStdString());
-        if (!program_id) {
-            QMessageBox::critical(this, tr("Invalid Movie File"), invalid_movie_text);
-            return;
-        }
-        QString game_path = game_list->FindGameByProgramID(program_id);
-        if (game_path.isEmpty()) {
-            QMessageBox::warning(this, tr("Game Not Found"),
-                                 tr("The movie you are trying to play is from a game that is not "
-                                    "in the game list. If you own the game, please add the game "
-                                    "folder to the game list and try to play the movie again."));
-            return;
-        }
-        if (!ValidateMovie(path, program_id))
-            return;
-        Core::Movie::GetInstance().PrepareForPlayback(path.toStdString());
-        BootGame(game_path);
     }
-    Core::Movie::GetInstance().StartPlayback(path.toStdString(), [this] {
-        QMetaObject::invokeMethod(this, "OnMoviePlaybackCompleted");
-    });
-    ui->action_Record_Movie->setEnabled(false);
-    ui->action_Play_Movie->setEnabled(false);
-    ui->action_Stop_Recording_Playback->setEnabled(true);
+
+    movie_playback_on_start = true;
+    movie_playback_path = dialog.GetMoviePath();
+    BootGame(dialog.GetGamePath());
+
+    ui->action_Close_Movie->setEnabled(true);
+    ui->action_Save_Movie->setEnabled(false);
 }
 
-void GMainWindow::OnStopRecordingPlayback() {
+void GMainWindow::OnCloseMovie() {
     if (movie_record_on_start) {
         QMessageBox::information(this, tr("Record Movie"), tr("Movie recording cancelled."));
         movie_record_on_start = false;
         movie_record_path.clear();
+        movie_record_author.clear();
     } else {
-        const bool was_recording = Core::Movie::GetInstance().IsRecordingInput();
+        const bool was_running = emu_thread && emu_thread->IsRunning();
+        if (was_running) {
+            OnPauseGame();
+        }
+
+        const bool was_recording =
+            Core::Movie::GetInstance().GetPlayMode() == Core::Movie::PlayMode::Recording;
         Core::Movie::GetInstance().Shutdown();
         if (was_recording) {
             QMessageBox::information(this, tr("Movie Saved"),
                                      tr("The movie is successfully saved."));
         }
+
+        if (was_running) {
+            OnStartGame();
+        }
     }
-    ui->action_Record_Movie->setEnabled(true);
-    ui->action_Play_Movie->setEnabled(true);
-    ui->action_Stop_Recording_Playback->setEnabled(false);
+
+    ui->action_Close_Movie->setEnabled(false);
+    ui->action_Save_Movie->setEnabled(false);
+}
+
+void GMainWindow::OnSaveMovie() {
+    const bool was_running = emu_thread && emu_thread->IsRunning();
+    if (was_running) {
+        OnPauseGame();
+    }
+
+    if (Core::Movie::GetInstance().GetPlayMode() == Core::Movie::PlayMode::Recording) {
+        Core::Movie::GetInstance().SaveMovie();
+        QMessageBox::information(this, tr("Movie Saved"), tr("The movie is successfully saved."));
+    } else {
+        LOG_ERROR(Frontend, "Tried to save movie while movie is not being recorded");
+    }
+
+    if (was_running) {
+        OnStartGame();
+    }
 }
 
 void GMainWindow::OnCaptureScreenshot() {
     OnPauseGame();
-    QFileDialog png_dialog(this, tr("Capture Screenshot"), UISettings::values.screenshot_path,
-                           tr("PNG Image (*.png)"));
-    png_dialog.setAcceptMode(QFileDialog::AcceptSave);
-    png_dialog.setDefaultSuffix(QStringLiteral("png"));
-    if (png_dialog.exec()) {
-        const QString path = png_dialog.selectedFiles().first();
-        if (!path.isEmpty()) {
-            UISettings::values.screenshot_path = QFileInfo(path).path();
-            render_window->CaptureScreenshot(UISettings::values.screenshot_resolution_factor, path);
-        }
+    std::string path = UISettings::values.screenshot_path.GetValue();
+    if (!FileUtil::IsDirectory(path)) {
+        if (!FileUtil::CreateFullPath(path)) {
+            QMessageBox::information(this, tr("Invalid Screenshot Directory"),
+                                     tr("Cannot create specified screenshot directory. Screenshot "
+                                        "path is set back to its default value."));
+            path = FileUtil::GetUserPath(FileUtil::UserPath::UserDir);
+            path.append("screenshots/");
+            UISettings::values.screenshot_path = path;
+        };
     }
+    const std::string filename =
+        game_title.remove(QRegularExpression(QStringLiteral("[\\/:?\"<>|]"))).toStdString();
+    const std::string timestamp =
+        QDateTime::currentDateTime().toString(QStringLiteral("dd.MM.yy_hh.mm.ss.z")).toStdString();
+    path.append(fmt::format("/{}_{}.png", filename, timestamp));
+
+    auto* const screenshot_window = secondary_window->HasFocus() ? secondary_window : render_window;
+    screenshot_window->CaptureScreenshot(UISettings::values.screenshot_resolution_factor.GetValue(),
+                                         QString::fromStdString(path));
     OnStartGame();
 }
 
@@ -2055,24 +2183,40 @@ void GMainWindow::UpdateStatusBar() {
         return;
     }
 
+    // Update movie status
+    const u64 current = Core::Movie::GetInstance().GetCurrentInputIndex();
+    const u64 total = Core::Movie::GetInstance().GetTotalInputCount();
+    const auto play_mode = Core::Movie::GetInstance().GetPlayMode();
+    if (play_mode == Core::Movie::PlayMode::Recording) {
+        message_label->setText(tr("Recording %1").arg(current));
+        message_label->setVisible(true);
+        message_label_used_for_movie = true;
+        ui->action_Save_Movie->setEnabled(true);
+    } else if (play_mode == Core::Movie::PlayMode::Playing) {
+        message_label->setText(tr("Playing %1 / %2").arg(current, total));
+        message_label->setVisible(true);
+        message_label_used_for_movie = true;
+        ui->action_Save_Movie->setEnabled(false);
+    } else if (play_mode == Core::Movie::PlayMode::MovieFinished) {
+        message_label->setText(tr("Movie Finished"));
+        message_label->setVisible(true);
+        message_label_used_for_movie = true;
+        ui->action_Save_Movie->setEnabled(false);
+    } else if (message_label_used_for_movie) { // Clear the label if movie was just closed
+        message_label->setText(QString{});
+        message_label->setVisible(false);
+        message_label_used_for_movie = false;
+        ui->action_Save_Movie->setEnabled(false);
+    }
+
     auto results = Core::System::GetInstance().GetAndResetPerfStats();
 
-    if (Settings::values.use_frame_limit_alternate) {
-        if (Settings::values.frame_limit_alternate == 0) {
-            emu_speed_label->setText(
-                tr("Speed: %1%").arg(results.emulation_speed * 100.0, 0, 'f', 0));
-
-        } else {
-            emu_speed_label->setText(tr("Speed: %1% / %2%")
-                                         .arg(results.emulation_speed * 100.0, 0, 'f', 0)
-                                         .arg(Settings::values.frame_limit_alternate));
-        }
-    } else if (Settings::values.frame_limit == 0) {
+    if (Settings::values.frame_limit.GetValue() == 0) {
         emu_speed_label->setText(tr("Speed: %1%").arg(results.emulation_speed * 100.0, 0, 'f', 0));
     } else {
         emu_speed_label->setText(tr("Speed: %1% / %2%")
                                      .arg(results.emulation_speed * 100.0, 0, 'f', 0)
-                                     .arg(Settings::values.frame_limit));
+                                     .arg(Settings::values.frame_limit.GetValue()));
     }
     game_fps_label->setText(tr("Game: %1 FPS").arg(results.game_fps, 0, 'f', 0));
     emu_frametime_label->setText(tr("Frame: %1 ms").arg(results.frametime * 1000.0, 0, 'f', 2));
@@ -2083,16 +2227,22 @@ void GMainWindow::UpdateStatusBar() {
 }
 
 void GMainWindow::HideMouseCursor() {
-    if (emu_thread == nullptr || UISettings::values.hide_mouse == false) {
+    if (emu_thread == nullptr || !UISettings::values.hide_mouse.GetValue()) {
         mouse_hide_timer.stop();
         ShowMouseCursor();
         return;
     }
     render_window->setCursor(QCursor(Qt::BlankCursor));
+    secondary_window->setCursor(QCursor(Qt::BlankCursor));
+    if (UISettings::values.single_window_mode.GetValue()) {
+        setCursor(QCursor(Qt::BlankCursor));
+    }
 }
 
 void GMainWindow::ShowMouseCursor() {
+    unsetCursor();
     render_window->unsetCursor();
+    secondary_window->unsetCursor();
     if (emu_thread != nullptr && UISettings::values.hide_mouse) {
         mouse_hide_timer.start();
     }
@@ -2102,15 +2252,15 @@ void GMainWindow::OnMouseActivity() {
     ShowMouseCursor();
 }
 
-void GMainWindow::mouseMoveEvent(QMouseEvent* event) {
+void GMainWindow::mouseMoveEvent([[maybe_unused]] QMouseEvent* event) {
     OnMouseActivity();
 }
 
-void GMainWindow::mousePressEvent(QMouseEvent* event) {
+void GMainWindow::mousePressEvent([[maybe_unused]] QMouseEvent* event) {
     OnMouseActivity();
 }
 
-void GMainWindow::mouseReleaseEvent(QMouseEvent* event) {
+void GMainWindow::mouseReleaseEvent([[maybe_unused]] QMouseEvent* event) {
     OnMouseActivity();
 }
 
@@ -2166,6 +2316,7 @@ void GMainWindow::OnCoreError(Core::System::ResultStatus result, std::string det
             emu_thread->SetRunning(true);
             message_label->setText(status_message);
             message_label->setVisible(true);
+            message_label_used_for_movie = false;
         }
     }
 }
@@ -2200,7 +2351,9 @@ void GMainWindow::closeEvent(QCloseEvent* event) {
         ShutdownGame();
 
     render_window->close();
+    secondary_window->close();
     multiplayer_state->Close();
+    InputCommon::Shutdown();
     QWidget::closeEvent(event);
 }
 
@@ -2343,11 +2496,38 @@ void GMainWindow::OnLanguageChanged(const QString& locale) {
         ui->action_Start->setText(tr("Continue"));
 }
 
+void GMainWindow::OnConfigurePerGame() {
+    u64 title_id{};
+    Core::System::GetInstance().GetAppLoader().ReadProgramId(title_id);
+    OpenPerGameConfiguration(title_id, game_path);
+}
+
+void GMainWindow::OpenPerGameConfiguration(u64 title_id, const QString& file_name) {
+    Core::System& system = Core::System::GetInstance();
+
+    Settings::SetConfiguringGlobal(false);
+    ConfigurePerGame dialog(this, title_id, file_name, system);
+    const auto result = dialog.exec();
+
+    if (result != QDialog::Accepted) {
+        Settings::RestoreGlobalState(system.IsPoweredOn());
+        return;
+    } else if (result == QDialog::Accepted) {
+        dialog.ApplyConfiguration();
+    }
+
+    // Do not cause the global config to write local settings into the config file
+    const bool is_powered_on = system.IsPoweredOn();
+    Settings::RestoreGlobalState(system.IsPoweredOn());
+
+    if (!is_powered_on) {
+        config->Save();
+    }
+}
+
 void GMainWindow::OnMoviePlaybackCompleted() {
+    OnPauseGame();
     QMessageBox::information(this, tr("Playback Completed"), tr("Movie playback completed."));
-    ui->action_Record_Movie->setEnabled(true);
-    ui->action_Play_Movie->setEnabled(true);
-    ui->action_Stop_Recording_Playback->setEnabled(false);
 }
 
 void GMainWindow::UpdateWindowTitle() {
@@ -2379,16 +2559,19 @@ void GMainWindow::UpdateUISettings() {
 }
 
 void GMainWindow::SyncMenuUISettings() {
-    ui->action_Screen_Layout_Default->setChecked(Settings::values.layout_option ==
+    ui->action_Screen_Layout_Default->setChecked(Settings::values.layout_option.GetValue() ==
                                                  Settings::LayoutOption::Default);
-    ui->action_Screen_Layout_Single_Screen->setChecked(Settings::values.layout_option ==
+    ui->action_Screen_Layout_Single_Screen->setChecked(Settings::values.layout_option.GetValue() ==
                                                        Settings::LayoutOption::SingleScreen);
-    ui->action_Screen_Layout_Large_Screen->setChecked(Settings::values.layout_option ==
+    ui->action_Screen_Layout_Large_Screen->setChecked(Settings::values.layout_option.GetValue() ==
                                                       Settings::LayoutOption::LargeScreen);
-    ui->action_Screen_Layout_Side_by_Side->setChecked(Settings::values.layout_option ==
+    ui->action_Screen_Layout_Side_by_Side->setChecked(Settings::values.layout_option.GetValue() ==
                                                       Settings::LayoutOption::SideScreen);
-    ui->action_Screen_Layout_Swap_Screens->setChecked(Settings::values.swap_screen);
-    ui->action_Screen_Layout_Upright_Screens->setChecked(Settings::values.upright_screen);
+    ui->action_Screen_Layout_Separate_Windows->setChecked(
+        Settings::values.layout_option.GetValue() == Settings::LayoutOption::SeparateWindows);
+    ui->action_Screen_Layout_Swap_Screens->setChecked(Settings::values.swap_screen.GetValue());
+    ui->action_Screen_Layout_Upright_Screens->setChecked(
+        Settings::values.upright_screen.GetValue());
 }
 
 void GMainWindow::RetranslateStatusBar() {
@@ -2433,7 +2616,7 @@ int main(int argc, char* argv[]) {
     QCoreApplication::setApplicationName(QStringLiteral("Citra"));
 
     QSurfaceFormat format;
-    format.setVersion(3, 3);
+    format.setVersion(4, 3);
     format.setProfile(QSurfaceFormat::CoreProfile);
     format.setSwapInterval(0);
     // TODO: expose a setting for buffer value (ie default/single/double/triple)
@@ -2461,11 +2644,13 @@ int main(int argc, char* argv[]) {
 
     // Register frontend applets
     Frontend::RegisterDefaultApplets();
-    Core::System::GetInstance().RegisterMiiSelector(std::make_shared<QtMiiSelector>(main_window));
-    Core::System::GetInstance().RegisterSoftwareKeyboard(std::make_shared<QtKeyboard>(main_window));
+
+    Core::System& system = Core::System::GetInstance();
+    system.RegisterMiiSelector(std::make_shared<QtMiiSelector>(main_window));
+    system.RegisterSoftwareKeyboard(std::make_shared<QtKeyboard>(main_window));
 
     // Register Qt image interface
-    Core::System::GetInstance().RegisterImageInterface(std::make_shared<QtImageInterface>());
+    system.RegisterImageInterface(std::make_shared<QtImageInterface>());
 
     main_window.show();
 

@@ -5,6 +5,7 @@
 #include <boost/serialization/base_object.hpp>
 #include <boost/serialization/shared_ptr.hpp>
 #include "common/archives.h"
+#include "common/settings.h"
 #include "core/core.h"
 #include "core/core_timing.h"
 #include "core/hle/ipc_helpers.h"
@@ -13,7 +14,6 @@
 #include "core/hle/service/hid/hid.h"
 #include "core/hle/service/ir/ir_rst.h"
 #include "core/movie.h"
-#include "core/settings.h"
 
 SERIALIZE_EXPORT_IMPL(Service::IR::IR_RST)
 SERVICE_CONSTRUCT_IMPL(Service::IR::IR_RST)
@@ -66,7 +66,7 @@ void IR_RST::UnloadInputDevices() {
     c_stick = nullptr;
 }
 
-void IR_RST::UpdateCallback(u64 userdata, s64 cycles_late) {
+void IR_RST::UpdateCallback(std::uintptr_t user_data, s64 cycles_late) {
     SharedMem* mem = reinterpret_cast<SharedMem*>(shared_memory->GetPointer());
 
     if (is_device_reload_pending.exchange(false))
@@ -175,8 +175,9 @@ IR_RST::IR_RST(Core::System& system) : ServiceFramework("ir:rst", 1), system(sys
     update_event = system.Kernel().CreateEvent(ResetType::OneShot, "IRRST:UpdateEvent");
 
     update_callback_id = system.CoreTiming().RegisterEvent(
-        "IRRST:UpdateCallBack",
-        [this](u64 userdata, s64 cycles_late) { UpdateCallback(userdata, cycles_late); });
+        "IRRST:UpdateCallBack", [this](std::uintptr_t user_data, s64 cycles_late) {
+            UpdateCallback(user_data, cycles_late);
+        });
 
     static const FunctionInfo functions[] = {
         {0x00010000, &IR_RST::GetHandles, "GetHandles"},

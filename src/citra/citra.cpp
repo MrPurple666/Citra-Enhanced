@@ -11,13 +11,6 @@
 // This needs to be included before getopt.h because the latter #defines symbols used by it
 #include "common/microprofile.h"
 
-#ifdef _WIN32
-// windows.h needs to be included before shellapi.h
-#include <windows.h>
-
-#include <shellapi.h>
-#endif
-
 #include "citra/config.h"
 #include "citra/emu_window/emu_window_sdl2.h"
 #include "citra/lodepng_image_interface.h"
@@ -29,6 +22,7 @@
 #include "common/logging/log.h"
 #include "common/scm_rev.h"
 #include "common/scope_exit.h"
+#include "common/settings.h"
 #include "common/string_util.h"
 #include "core/core.h"
 #include "core/dumping/backend.h"
@@ -41,7 +35,7 @@
 #include "core/hle/service/cfg/cfg.h"
 #include "core/loader/loader.h"
 #include "core/movie.h"
-#include "core/settings.h"
+#include "input_common/main.h"
 #include "network/network.h"
 #include "video_core/renderer_base.h"
 
@@ -52,6 +46,11 @@
 #endif
 
 #ifdef _WIN32
+// windows.h needs to be included before shellapi.h
+#include <windows.h>
+
+#include <shellapi.h>
+
 extern "C" {
 // tells Nvidia drivers to use the dedicated GPU by default on laptops with switchable graphics
 __declspec(dllexport) unsigned long NvOptimusEnablement = 0x00000001;
@@ -66,6 +65,7 @@ static void PrintHelp(const char* argv0) {
                  "-m, --multiplayer=nick:password@address:port"
                  " Nickname, password, address and port for multiplayer\n"
                  "-r, --movie-record=[file]  Record a movie (game inputs) to the given file\n"
+                 "-a, --movie-record-author=AUTHOR Sets the author of the movie to be recorded\n"
                  "-p, --movie-play=[file]    Playback the movie (game inputs) from the given file\n"
                  "-d, --dump-video=[file]    Dumps audio and video to the given video file\n"
                  "-f, --fullscreen     Start in fullscreen mode\n"
@@ -103,41 +103,44 @@ static void OnNetworkError(const Network::RoomMember::Error& error) {
         break;
     case Network::RoomMember::Error::CouldNotConnect:
         LOG_ERROR(Network, "Error: Could not connect");
-        exit(1);
+        std::exit(1);
         break;
     case Network::RoomMember::Error::NameCollision:
         LOG_ERROR(
             Network,
             "You tried to use the same nickname as another user that is connected to the Room");
-        exit(1);
+        std::exit(1);
         break;
     case Network::RoomMember::Error::MacCollision:
         LOG_ERROR(Network, "You tried to use the same MAC-Address as another user that is "
                            "connected to the Room");
-        exit(1);
+        std::exit(1);
         break;
     case Network::RoomMember::Error::ConsoleIdCollision:
         LOG_ERROR(Network, "Your Console ID conflicted with someone else in the Room");
-        exit(1);
+        std::exit(1);
         break;
     case Network::RoomMember::Error::WrongPassword:
         LOG_ERROR(Network, "Room replied with: Wrong password");
-        exit(1);
+        std::exit(1);
         break;
     case Network::RoomMember::Error::WrongVersion:
         LOG_ERROR(Network,
                   "You are using a different version than the room you are trying to connect to");
-        exit(1);
+        std::exit(1);
         break;
     case Network::RoomMember::Error::RoomIsFull:
         LOG_ERROR(Network, "The room is full");
-        exit(1);
+        std::exit(1);
         break;
     case Network::RoomMember::Error::HostKicked:
         LOG_ERROR(Network, "You have been kicked by the host");
         break;
     case Network::RoomMember::Error::HostBanned:
         LOG_ERROR(Network, "You have been banned by the host");
+        break;
+    default:
+        LOG_ERROR(Network, "Unknown network error: {}", error);
         break;
     }
 }
@@ -171,7 +174,7 @@ static void OnStatusMessageReceived(const Network::StatusMessageEntry& msg) {
 
 static void InitializeLogging() {
     Log::Filter log_filter(Log::Level::Debug);
-    log_filter.ParseFilterString(Settings::values.log_filter);
+    log_filter.ParseFilterString(Settings::values.log_filter.GetValue());
     Log::SetGlobalFilter(log_filter);
 
     Log::AddBackend(std::make_unique<Log::ColorConsoleBackend>());
@@ -189,9 +192,10 @@ int main(int argc, char** argv) {
     Common::DetachedTasks detached_tasks;
     Config config;
     int option_index = 0;
-    bool use_gdbstub = Settings::values.use_gdbstub;
-    u32 gdb_port = static_cast<u32>(Settings::values.gdbstub_port);
+    bool use_gdbstub = Settings::values.use_gdbstub.GetValue();
+    u32 gdb_port = static_cast<u32>(Settings::values.gdbstub_port.GetValue());
     std::string movie_record;
+    std::string movie_record_author;
     std::string movie_play;
     std::string dump_video;
 
@@ -217,11 +221,17 @@ int main(int argc, char** argv) {
     u16 port = Network::DefaultRoomPort;
 
     static struct option long_options[] = {
-        {"gdbport", required_argument, 0, 'g'},     {"install", required_argument, 0, 'i'},
-        {"multiplayer", required_argument, 0, 'm'}, {"movie-record", required_argument, 0, 'r'},
-        {"movie-play", required_argument, 0, 'p'},  {"dump-video", required_argument, 0, 'd'},
-        {"fullscreen", no_argument, 0, 'f'},        {"help", no_argument, 0, 'h'},
-        {"version", no_argument, 0, 'v'},           {0, 0, 0, 0},
+        {"gdbport", required_argument, 0, 'g'},
+        {"install", required_argument, 0, 'i'},
+        {"multiplayer", required_argument, 0, 'm'},
+        {"movie-record", required_argument, 0, 'r'},
+        {"movie-record-author", required_argument, 0, 'a'},
+        {"movie-play", required_argument, 0, 'p'},
+        {"dump-video", required_argument, 0, 'd'},
+        {"fullscreen", no_argument, 0, 'f'},
+        {"help", no_argument, 0, 'h'},
+        {"version", no_argument, 0, 'v'},
+        {0, 0, 0, 0},
     };
 
     while (optind < argc) {
@@ -285,6 +295,9 @@ int main(int argc, char** argv) {
             case 'r':
                 movie_record = optarg;
                 break;
+            case 'a':
+                movie_record_author = optarg;
+                break;
             case 'p':
                 movie_play = optarg;
                 break;
@@ -347,11 +360,23 @@ int main(int argc, char** argv) {
     // Register generic image interface
     Core::System::GetInstance().RegisterImageInterface(std::make_shared<LodePNGImageInterface>());
 
-    std::unique_ptr<EmuWindow_SDL2> emu_window{std::make_unique<EmuWindow_SDL2>(fullscreen)};
-    Frontend::ScopeAcquireContext scope(*emu_window);
-    Core::System& system{Core::System::GetInstance()};
+    EmuWindow_SDL2::InitializeSDL2();
 
-    const Core::System::ResultStatus load_result{system.Load(*emu_window, filepath)};
+    const auto emu_window{std::make_unique<EmuWindow_SDL2>(fullscreen, false)};
+    const bool use_secondary_window{Settings::values.layout_option.GetValue() ==
+                                    Settings::LayoutOption::SeparateWindows};
+    const auto secondary_window =
+        use_secondary_window ? std::make_unique<EmuWindow_SDL2>(false, true) : nullptr;
+
+    Frontend::ScopeAcquireContext scope(*emu_window);
+
+    LOG_INFO(Frontend, "Citra Version: {} | {}-{}", Common::g_build_fullname, Common::g_scm_branch,
+             Common::g_scm_desc);
+    Settings::LogSettings();
+
+    Core::System& system = Core::System::GetInstance();
+    const Core::System::ResultStatus load_result{
+        system.Load(*emu_window, filepath, secondary_window.get())};
 
     switch (load_result) {
     case Core::System::ResultStatus::ErrorGetLoader:
@@ -380,9 +405,12 @@ int main(int argc, char** argv) {
         return -1;
     case Core::System::ResultStatus::Success:
         break; // Expected case
+    default:
+        LOG_ERROR(Frontend, "Error while loading ROM: {}", system.GetStatusDetails());
+        break;
     }
 
-    system.TelemetrySession().AddField(Telemetry::FieldType::App, "Frontend", "SDL");
+    system.TelemetrySession().AddField(Common::Telemetry::FieldType::App, "Frontend", "SDL");
 
     if (use_multiplayer) {
         if (auto member = Network::GetRoomMember().lock()) {
@@ -401,10 +429,14 @@ int main(int argc, char** argv) {
     }
 
     if (!movie_play.empty()) {
+        auto metadata = Core::Movie::GetInstance().GetMovieMetadata(movie_play);
+        LOG_INFO(Movie, "Author: {}", metadata.author);
+        LOG_INFO(Movie, "Rerecord count: {}", metadata.rerecord_count);
+        LOG_INFO(Movie, "Input count: {}", metadata.input_count);
         Core::Movie::GetInstance().StartPlayback(movie_play);
     }
     if (!movie_record.empty()) {
-        Core::Movie::GetInstance().StartRecording(movie_record);
+        Core::Movie::GetInstance().StartRecording(movie_record, movie_record_author);
     }
     if (!dump_video.empty()) {
         Layout::FramebufferLayout layout{
@@ -412,24 +444,52 @@ int main(int argc, char** argv) {
         system.VideoDumper().StartDumping(dump_video, layout);
     }
 
-    std::thread render_thread([&emu_window] { emu_window->Present(); });
+    std::thread main_render_thread([&emu_window] { emu_window->Present(); });
+    std::thread secondary_render_thread([&secondary_window] {
+        if (secondary_window) {
+            secondary_window->Present();
+        }
+    });
 
     std::atomic_bool stop_run;
-    Core::System::GetInstance().Renderer().Rasterizer()->LoadDiskResources(
+    system.Renderer().Rasterizer()->LoadDiskResources(
         stop_run, [](VideoCore::LoadCallbackStage stage, std::size_t value, std::size_t total) {
             LOG_DEBUG(Frontend, "Loading stage {} progress {} {}", static_cast<u32>(stage), value,
                       total);
         });
 
-    while (emu_window->IsOpen()) {
-        system.RunLoop();
+    const auto secondary_is_open = [&secondary_window] {
+        // if the secondary window isn't created, it shouldn't affect the main loop
+        return secondary_window ? secondary_window->IsOpen() : true;
+    };
+    while (emu_window->IsOpen() && secondary_is_open()) {
+        const auto result = system.RunLoop();
+
+        switch (result) {
+        case Core::System::ResultStatus::ShutdownRequested:
+            emu_window->RequestClose();
+            break;
+        case Core::System::ResultStatus::Success:
+            break;
+        default:
+            LOG_ERROR(Frontend, "Error in main run loop: {}", result, system.GetStatusDetails());
+            break;
+        }
     }
-    render_thread.join();
+    emu_window->RequestClose();
+    if (secondary_window) {
+        secondary_window->RequestClose();
+    }
+    main_render_thread.join();
+    secondary_render_thread.join();
 
     Core::Movie::GetInstance().Shutdown();
     if (system.VideoDumper().IsDumping()) {
         system.VideoDumper().StopDumping();
     }
+
+    Network::Shutdown();
+    InputCommon::Shutdown();
 
     system.Shutdown();
 

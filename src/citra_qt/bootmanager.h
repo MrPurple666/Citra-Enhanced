@@ -16,7 +16,6 @@
 #include "core/frontend/emu_window.h"
 
 class QKeyEvent;
-class QScreen;
 class QTouchEvent;
 class QOffscreenSurface;
 class QOpenGLContext;
@@ -123,12 +122,15 @@ signals:
     void ErrorThrown(Core::System::ResultStatus, std::string);
 
     void LoadProgress(VideoCore::LoadCallbackStage stage, std::size_t value, std::size_t total);
+
+    void HideLoadingScreen();
 };
 
 class OpenGLWindow : public QWindow {
     Q_OBJECT
 public:
-    explicit OpenGLWindow(QWindow* parent, QWidget* event_handler, QOpenGLContext* shared_context);
+    explicit OpenGLWindow(QWindow* parent, QWidget* event_handler, QOpenGLContext* shared_context,
+                          bool is_secondary = false);
 
     ~OpenGLWindow();
 
@@ -141,13 +143,14 @@ protected:
 private:
     std::unique_ptr<QOpenGLContext> context;
     QWidget* event_handler;
+    bool is_secondary;
 };
 
 class GRenderWindow : public QWidget, public Frontend::EmuWindow {
     Q_OBJECT
 
 public:
-    GRenderWindow(QWidget* parent, EmuThread* emu_thread);
+    GRenderWindow(QWidget* parent, EmuThread* emu_thread, bool is_secondary);
     ~GRenderWindow() override;
 
     // EmuWindow implementation.
@@ -177,6 +180,10 @@ public:
     bool event(QEvent* event) override;
 
     void focusOutEvent(QFocusEvent* event) override;
+    void focusInEvent(QFocusEvent* event) override;
+    bool HasFocus() const {
+        return has_focus;
+    }
 
     void InitRenderTarget();
 
@@ -228,6 +235,7 @@ private:
     /// Temporary storage of the screenshot taken
     QImage screenshot_image;
     bool first_frame = false;
+    bool has_focus = false;
 
 protected:
     void showEvent(QShowEvent* event) override;

@@ -8,6 +8,7 @@
 #include "common/common_paths.h"
 #include "common/file_util.h"
 #include "common/logging/log.h"
+#include "common/settings.h"
 #include "core/core.h"
 #include "core/file_sys/archive_ncch.h"
 #include "core/file_sys/file_backend.h"
@@ -28,7 +29,6 @@
 #include "core/hle/service/service.h"
 #include "core/hw/aes/ccm.h"
 #include "core/hw/aes/key.h"
-#include "core/settings.h"
 
 SERVICE_CONSTRUCT_IMPL(Service::APT::Module)
 
@@ -230,8 +230,8 @@ void Module::APTInterface::GetSharedFont(Kernel::HLERequestContext& ctx) {
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 2);
 
     // Log in telemetry if the game uses the shared font
-    apt->system.TelemetrySession().AddField(Telemetry::FieldType::Session, "RequiresSharedFont",
-                                            true);
+    apt->system.TelemetrySession().AddField(Common::Telemetry::FieldType::Session,
+                                            "RequiresSharedFont", true);
 
     if (!apt->shared_font_loaded) {
         // On real 3DS, font loading happens on booting. However, we load it on demand to coordinate
@@ -262,8 +262,8 @@ void Module::APTInterface::GetSharedFont(Kernel::HLERequestContext& ctx) {
     // kernel version and an applet with new kernel version run at the same time, and they both use
     // shared font, different linear heap region would have required shared font to relocate
     // according to two different addresses at the same time, which is impossible.
-    VAddr target_address =
-        apt->shared_font_mem->GetLinearHeapPhysicalOffset() + Memory::LINEAR_HEAP_VADDR;
+    VAddr target_address = static_cast<VAddr>(apt->shared_font_mem->GetLinearHeapPhysicalOffset()) +
+                           Memory::LINEAR_HEAP_VADDR;
     if (!apt->shared_font_relocated) {
         BCFNT::RelocateSharedFont(apt->shared_font_mem, target_address);
         apt->shared_font_relocated = true;

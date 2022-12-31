@@ -5,6 +5,7 @@
 #include <boost/serialization/weak_ptr.hpp>
 #include "common/archives.h"
 #include "common/logging/log.h"
+#include "common/settings.h"
 #include "core/core.h"
 #include "core/frontend/mic.h"
 #include "core/hle/ipc.h"
@@ -14,7 +15,6 @@
 #include "core/hle/kernel/kernel.h"
 #include "core/hle/kernel/shared_memory.h"
 #include "core/hle/service/mic_u.h"
-#include "core/settings.h"
 
 SERVICE_CONSTRUCT_IMPL(Service::MIC::MIC_U)
 SERIALIZE_EXPORT_IMPL(Service::MIC::MIC_U)
@@ -126,9 +126,9 @@ struct MIC_U::Impl {
     explicit Impl(Core::System& system) : timing(system.CoreTiming()) {
         buffer_full_event =
             system.Kernel().CreateEvent(Kernel::ResetType::OneShot, "MIC_U::buffer_full_event");
-        buffer_write_event =
-            timing.RegisterEvent("MIC_U::UpdateBuffer", [this](u64 userdata, s64 cycles_late) {
-                UpdateSharedMemBuffer(userdata, cycles_late);
+        buffer_write_event = timing.RegisterEvent(
+            "MIC_U::UpdateBuffer", [this](std::uintptr_t user_data, s64 cycles_late) {
+                UpdateSharedMemBuffer(user_data, cycles_late);
             });
     }
 
@@ -158,7 +158,7 @@ struct MIC_U::Impl {
         LOG_TRACE(Service_MIC, "called");
     }
 
-    void UpdateSharedMemBuffer(u64 userdata, s64 cycles_late) {
+    void UpdateSharedMemBuffer(std::uintptr_t user_data, s64 cycles_late) {
         if (change_mic_impl_requested.exchange(false)) {
             CreateMic();
         }
@@ -350,12 +350,12 @@ struct MIC_U::Impl {
 
     void CreateMic() {
         std::unique_ptr<Frontend::Mic::Interface> new_mic;
-        switch (Settings::values.mic_input_type) {
+        switch (Settings::values.mic_input_type.GetValue()) {
         case Settings::MicInputType::None:
             new_mic = std::make_unique<Frontend::Mic::NullMic>();
             break;
         case Settings::MicInputType::Real:
-            new_mic = Frontend::Mic::CreateRealMic(Settings::values.mic_input_device);
+            new_mic = Frontend::Mic::CreateRealMic(Settings::values.mic_input_device.GetValue());
             break;
         case Settings::MicInputType::Static:
             new_mic = std::make_unique<Frontend::Mic::StaticMic>();

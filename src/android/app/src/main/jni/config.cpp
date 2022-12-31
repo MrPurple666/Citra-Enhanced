@@ -11,16 +11,17 @@
 #include "common/file_util.h"
 #include "common/logging/log.h"
 #include "common/param_package.h"
+#include "common/settings.h"
 #include "core/core.h"
 #include "core/hle/service/cfg/cfg.h"
 #include "core/hle/service/service.h"
-#include "core/settings.h"
 #include "input_common/main.h"
 #include "input_common/udp/client.h"
 #include "jni/camera/ndk_camera.h"
 #include "jni/config.h"
 #include "jni/default_ini.h"
 #include "jni/input_manager.h"
+#include "network/network_settings.h"
 
 Config::Config() {
     // TODO: Don't hardcode the path; let the frontend decide where to put the config files.
@@ -108,9 +109,9 @@ void Config::ReadValues() {
     Settings::values.cpu_clock_percentage =
         static_cast<int>(sdl2_config->GetInteger("Core", "cpu_clock_percentage", 100));
 
-    // Interface
+    // Premium
     Settings::values.texture_filter_name =
-        sdl2_config->GetString("Interface", "texture_filter_name", "none");
+        sdl2_config->GetString("Premium", "texture_filter_name", "none");
 
     // Renderer
     Settings::values.use_gles = sdl2_config->GetBoolean("Renderer", "use_gles", true);
@@ -118,22 +119,9 @@ void Config::ReadValues() {
     Settings::values.use_hw_shader = sdl2_config->GetBoolean("Renderer", "use_hw_shader", true);
     Settings::values.shaders_accurate_mul =
         sdl2_config->GetBoolean("Renderer", "shaders_accurate_mul", false);
-    Settings::values.use_asynchronous_gpu_emulation =
-        sdl2_config->GetBoolean("Renderer", "use_asynchronous_gpu_emulation", true);
     Settings::values.use_shader_jit = sdl2_config->GetBoolean("Renderer", "use_shader_jit", true);
     Settings::values.resolution_factor =
         static_cast<u16>(sdl2_config->GetInteger("Renderer", "resolution_factor", 1));
-    Settings::values.show_fps = sdl2_config->GetBoolean("Renderer", "show_fps", false);
-    Settings::values.osd_size = static_cast<float>(sdl2_config->GetReal("Renderer", "osd_size", 2.0f));
-    Settings::values.core_downcount_hack = sdl2_config->GetBoolean("Renderer", "cpu_usage_limit", false);
-    Settings::values.texture_load_hack = sdl2_config->GetBoolean("Renderer", "texture_load_hack", false);
-
-    // Utility
-    Settings::values.dump_textures = sdl2_config->GetBoolean("Utility", "dump_textures", false);
-    Settings::values.custom_textures = sdl2_config->GetBoolean("Utility", "custom_textures", false);
-    Settings::values.preload_textures =
-        sdl2_config->GetBoolean("Utility", "preload_textures", false);
-
     Settings::values.use_disk_shader_cache =
         sdl2_config->GetBoolean("Renderer", "use_disk_shader_cache", true);
     Settings::values.use_vsync_new = sdl2_config->GetBoolean("Renderer", "use_vsync_new", true);
@@ -151,9 +139,9 @@ void Config::ReadValues() {
     Settings::values.factor_3d =
         static_cast<u8>(sdl2_config->GetInteger("Renderer", "factor_3d", 0));
     std::string default_shader = "none (builtin)";
-    if (Settings::values.render_3d == Settings::StereoRenderOption::Anaglyph)
+    if (Settings::values.render_3d.GetValue() == Settings::StereoRenderOption::Anaglyph)
         default_shader = "dubois (builtin)";
-    else if (Settings::values.render_3d == Settings::StereoRenderOption::Interlaced)
+    else if (Settings::values.render_3d.GetValue() == Settings::StereoRenderOption::Interlaced)
         default_shader = "horizontal (builtin)";
     Settings::values.pp_shader_name =
         sdl2_config->GetString("Renderer", "pp_shader_name", default_shader);
@@ -166,7 +154,7 @@ void Config::ReadValues() {
 
     // Layout
     Settings::values.layout_option = static_cast<Settings::LayoutOption>(sdl2_config->GetInteger(
-        "Layout", "layout_option", static_cast<int>(Settings::LayoutOption::LargeScreen)));
+        "Layout", "layout_option", static_cast<int>(Settings::LayoutOption::MobileLandscape)));
     Settings::values.custom_layout = sdl2_config->GetBoolean("Layout", "custom_layout", false);
     Settings::values.custom_top_left =
         static_cast<u16>(sdl2_config->GetInteger("Layout", "custom_top_left", 0));
@@ -191,10 +179,16 @@ void Config::ReadValues() {
     Settings::values.cardboard_y_shift =
         static_cast<int>(sdl2_config->GetInteger("Layout", "cardboard_y_shift", 0));
 
+    // Utility
+    Settings::values.dump_textures = sdl2_config->GetBoolean("Utility", "dump_textures", false);
+    Settings::values.custom_textures = sdl2_config->GetBoolean("Utility", "custom_textures", false);
+    Settings::values.preload_textures =
+        sdl2_config->GetBoolean("Utility", "preload_textures", false);
+
     // Audio
-    Settings::values.enable_dsp_lle = sdl2_config->GetBoolean("Audio", "enable_dsp_lle", false);
-    Settings::values.enable_dsp_lle_multithread =
-        sdl2_config->GetBoolean("Audio", "enable_dsp_lle_multithread", false);
+    Settings::values.audio_emulation =
+        static_cast<Settings::AudioEmulation>(sdl2_config->GetInteger(
+            "Audio", "audio_emulation", static_cast<int>(Settings::AudioEmulation::HLE)));
     Settings::values.sink_id = sdl2_config->GetString("Audio", "output_engine", "auto");
     Settings::values.enable_audio_stretching =
         sdl2_config->GetBoolean("Audio", "enable_audio_stretching", true);
@@ -235,6 +229,10 @@ void Config::ReadValues() {
                 std::chrono::system_clock::from_time_t(std::mktime(&t)).time_since_epoch())
                 .count();
     }
+    Settings::values.plugin_loader_enabled =
+        sdl2_config->GetBoolean("System", "plugin_loader", false);
+    Settings::values.allow_plugin_loader =
+        sdl2_config->GetBoolean("System", "allow_plugin_loader", true);
 
     // Camera
     using namespace Service::CAM;
@@ -273,12 +271,12 @@ void Config::ReadValues() {
     }
 
     // Web Service
-    Settings::values.enable_telemetry =
+    NetSettings::values.enable_telemetry =
         sdl2_config->GetBoolean("WebService", "enable_telemetry", true);
-    Settings::values.web_api_url =
+    NetSettings::values.web_api_url =
         sdl2_config->GetString("WebService", "web_api_url", "https://api.citra-emu.org");
-    Settings::values.citra_username = sdl2_config->GetString("WebService", "citra_username", "");
-    Settings::values.citra_token = sdl2_config->GetString("WebService", "citra_token", "");
+    NetSettings::values.citra_username = sdl2_config->GetString("WebService", "citra_username", "");
+    NetSettings::values.citra_token = sdl2_config->GetString("WebService", "citra_token", "");
 
     // Update CFG file based on settings
     UpdateCFG();

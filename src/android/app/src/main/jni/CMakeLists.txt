@@ -1,4 +1,4 @@
-add_library(main SHARED
+add_library(citra-android SHARED
     android_common/android_common.cpp
     android_common/android_common.h
     applets/mii_selector.cpp
@@ -11,6 +11,9 @@ add_library(main SHARED
     camera/ndk_camera.h
     camera/still_image_camera.cpp
     camera/still_image_camera.h
+    cheats/cheat.cpp
+    cheats/cheat.h
+    cheats/cheat_engine.cpp
     config.cpp
     config.h
     default_ini.h
@@ -26,15 +29,13 @@ add_library(main SHARED
     lodepng_image_interface.h
     mic.cpp
     mic.h
-    multiplayer.cpp
-    multiplayer.h
     native.cpp
     native.h
     ndk_motion.cpp
     ndk_motion.h
 )
 
-target_link_libraries(main PRIVATE audio_core common core input_common network)
-target_link_libraries(main PRIVATE android camera2ndk mediandk jnigraphics lodepng EGL glad inih log yuv)
+target_link_libraries(citra-android PRIVATE audio_core common core input_common network)
+target_link_libraries(citra-android PRIVATE android camera2ndk EGL glad inih jnigraphics lodepng log mediandk yuv)
 
-set(CPACK_PACKAGE_EXECUTABLES ${CPACK_PACKAGE_EXECUTABLES} main)
+set(CPACK_PACKAGE_EXECUTABLES ${CPACK_PACKAGE_EXECUTABLES} citra-android)

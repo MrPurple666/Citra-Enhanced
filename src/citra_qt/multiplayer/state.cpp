@@ -7,7 +7,6 @@
 #include <QIcon>
 #include <QMessageBox>
 #include <QStandardItemModel>
-#include "citra_qt/game_list.h"
 #include "citra_qt/multiplayer/client_room.h"
 #include "citra_qt/multiplayer/direct_connect.h"
 #include "citra_qt/multiplayer/host_room.h"
@@ -16,7 +15,6 @@
 #include "citra_qt/multiplayer/state.h"
 #include "citra_qt/uisettings.h"
 #include "citra_qt/util/clickable_label.h"
-#include "common/announce_multiplayer_room.h"
 #include "common/logging/log.h"
 
 MultiplayerState::MultiplayerState(QWidget* parent, QStandardItemModel* game_list_model,
@@ -37,7 +35,7 @@ MultiplayerState::MultiplayerState(QWidget* parent, QStandardItemModel* game_lis
     qRegisterMetaType<Network::RoomMember::State>();
     qRegisterMetaType<Network::RoomMember::Error>();
     qRegisterMetaType<Common::WebResult>();
-    announce_multiplayer_session = std::make_shared<Core::AnnounceMultiplayerSession>();
+    announce_multiplayer_session = std::make_shared<Network::AnnounceMultiplayerSession>();
     announce_multiplayer_session->BindErrorCallback(
         [this](const Common::WebResult& result) { emit AnnounceFailed(result); });
     connect(this, &MultiplayerState::AnnounceFailed, this, &MultiplayerState::OnAnnounceFailed);
@@ -231,10 +229,10 @@ bool MultiplayerState::OnCloseRoom() {
         if (room->GetState() != Network::Room::State::Open) {
             return true;
         }
+
         // Save ban list
-        if (auto room = Network::GetRoom().lock()) {
-            UISettings::values.ban_list = std::move(room->GetBanList());
-        }
+        UISettings::values.ban_list = room->GetBanList();
+
         room->Destroy();
         announce_multiplayer_session->Stop();
         LOG_DEBUG(Frontend, "Closed the room (as a server)");

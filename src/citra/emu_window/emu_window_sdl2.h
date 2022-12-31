@@ -29,8 +29,10 @@ private:
 
 class EmuWindow_SDL2 : public Frontend::EmuWindow {
 public:
-    explicit EmuWindow_SDL2(bool fullscreen);
+    explicit EmuWindow_SDL2(bool fullscreen, bool is_secondary);
     ~EmuWindow_SDL2();
+
+    static void InitializeSDL2();
 
     void Present();
 
@@ -46,8 +48,16 @@ public:
     /// Whether the window is still open, and a close request hasn't yet been sent
     bool IsOpen() const;
 
+    /// Close the window.
+    void RequestClose();
+
     /// Creates a new context that is shared with the current context
     std::unique_ptr<GraphicsContext> CreateSharedContext() const override;
+
+    /// Saves the current context, for the purpose of e.g. creating new shared contexts
+    void SaveContext() override;
+    /// Restores the context previously saved
+    void RestoreContext() override;
 
 private:
     /// Called by PollEvents when a key is pressed or released.
@@ -80,11 +90,17 @@ private:
     /// Called when a configuration change affects the minimal size of the window
     void OnMinimalClientAreaChangeRequest(std::pair<u32, u32> minimal_size) override;
 
+    /// Called when polling to update framerate
+    void UpdateFramerateCounter();
+
     /// Is the window still open?
     bool is_open = true;
 
     /// Internal SDL2 render window
     SDL_Window* render_window;
+
+    /// Internal SDL2 window ID
+    int render_window_id{};
 
     /// Fake hidden window for the core context
     SDL_Window* dummy_window;
@@ -93,6 +109,9 @@ private:
 
     /// The OpenGL context associated with the window
     SDL_GLContext window_context;
+
+    /// Used by SaveContext and RestoreContext
+    SDL_GLContext last_saved_context;
 
     /// The OpenGL context associated with the core
     std::unique_ptr<Frontend::GraphicsContext> core_context;

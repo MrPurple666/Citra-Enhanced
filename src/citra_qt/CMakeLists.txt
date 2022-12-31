@@ -38,6 +38,8 @@ add_executable(citra-qt
     configuration/config.cpp
     configuration/config.h
     configuration/configure.ui
+    configuration/configuration_shared.cpp
+    configuration/configuration_shared.h
     configuration/configure_audio.cpp
     configuration/configure_audio.h
     configuration/configure_audio.ui
@@ -49,6 +51,7 @@ add_executable(citra-qt
     configuration/configure_debug.ui
     configuration/configure_enhancements.cpp
     configuration/configure_enhancements.h
+    configuration/configure_enhancements.ui
     configuration/configure_dialog.cpp
     configuration/configure_dialog.h
     configuration/configure_general.cpp
@@ -66,6 +69,9 @@ add_executable(citra-qt
     configuration/configure_motion_touch.cpp
     configuration/configure_motion_touch.h
     configuration/configure_motion_touch.ui
+    configuration/configure_per_game.cpp
+    configuration/configure_per_game.h
+    configuration/configure_per_game.ui
     configuration/configure_storage.cpp
     configuration/configure_storage.h
     configuration/configure_storage.ui
@@ -128,6 +134,12 @@ add_executable(citra-qt
     main.cpp
     main.h
     main.ui
+    movie/movie_play_dialog.cpp
+    movie/movie_play_dialog.h
+    movie/movie_play_dialog.ui
+    movie/movie_record_dialog.cpp
+    movie/movie_record_dialog.h
+    movie/movie_record_dialog.ui
     multiplayer/chat_room.cpp
     multiplayer/chat_room.h
     multiplayer/chat_room.ui
@@ -152,6 +164,7 @@ add_executable(citra-qt
     multiplayer/state.cpp
     multiplayer/state.h
     multiplayer/validation.h
+    precompiled_headers.h
     uisettings.cpp
     uisettings.h
     qt_image_interface.cpp
@@ -236,6 +249,10 @@ if (APPLE)
     target_sources(citra-qt PRIVATE ${MACOSX_ICON})
     set_target_properties(citra-qt PROPERTIES MACOSX_BUNDLE TRUE)
     set_target_properties(citra-qt PROPERTIES MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/Info.plist)
+    target_sources(citra-qt PRIVATE
+        macos_authorization.h
+        macos_authorization.mm
+    )
 elseif(WIN32)
     # compile as a win32 gui application instead of a console application
     target_link_libraries(citra-qt PRIVATE Qt5::WinMain)
@@ -302,4 +319,8 @@ if (MSVC)
         include(CopyCitraFFmpegDeps)
         copy_citra_FFmpeg_deps(citra-qt)
     endif()
+endif()
+
+if (CITRA_USE_PRECOMPILED_HEADERS)
+    target_precompile_headers(citra-qt PRIVATE precompiled_headers.h)
 endif()

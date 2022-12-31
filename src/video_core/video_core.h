@@ -5,6 +5,7 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include "core/frontend/emu_window.h"
@@ -52,32 +53,12 @@ extern Memory::MemorySystem* g_memory;
 enum class ResultStatus {
     Success,
     ErrorGenericDrivers,
-    ErrorBelowGL33,
+    ErrorBelowGL43,
 };
 
 /// Initialize the video core
-ResultStatus Init(Core::System& system, Frontend::EmuWindow& emu_window,
+ResultStatus Init(Frontend::EmuWindow& emu_window, Frontend::EmuWindow* secondary_window,
                   Memory::MemorySystem& memory);
-
-void ProcessCommandList(PAddr list, u32 size);
-
-/// Notify rasterizer that it should swap the current framebuffer
-void SwapBuffers();
-
-/// Perform a DisplayTransfer (accelerated by the rasterizer if available)
-void DisplayTransfer(const GPU::Regs::DisplayTransferConfig* config);
-
-/// Perform a MemoryFill (accelerated by the rasterizer if available)
-void MemoryFill(const GPU::Regs::MemoryFillConfig* config, bool is_second_filler);
-
-/// Notify rasterizer that any caches of the specified region should be flushed to Switch memory
-void FlushRegion(VAddr addr, u64 size);
-
-/// Notify rasterizer that any caches of the specified region should be flushed and invalidated
-void FlushAndInvalidateRegion(VAddr addr, u64 size);
-
-/// Notify rasterizer that any caches of the specified region should be invalidated
-void InvalidateRegion(VAddr addr, u64 size);
 
 /// Shutdown the video core
 void Shutdown();

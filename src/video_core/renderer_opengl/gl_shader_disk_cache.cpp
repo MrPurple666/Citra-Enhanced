@@ -11,10 +11,10 @@
 #include "common/file_util.h"
 #include "common/logging/log.h"
 #include "common/scm_rev.h"
+#include "common/settings.h"
 #include "common/zstd_compression.h"
 #include "core/core.h"
 #include "core/hle/kernel/process.h"
-#include "core/settings.h"
 #include "video_core/renderer_opengl/gl_shader_disk_cache.h"
 
 namespace OpenGL {
@@ -33,6 +33,8 @@ enum class PrecompiledEntryKind : u32 {
 
 constexpr u32 NativeVersion = 1;
 
+// The hash is based on relevant files. The list of files can be found at src/common/CMakeLists.txt
+// and CMakeModules/GenerateSCMRev.cmake
 ShaderCacheVersionHash GetShaderCacheVersionHash() {
     ShaderCacheVersionHash hash{};
     const std::size_t length = std::min(std::strlen(Common::g_shader_cache_version), hash.size());
@@ -387,10 +389,6 @@ void ShaderDiskCache::SaveDecompiled(u64 unique_identifier,
 void ShaderDiskCache::SaveDump(u64 unique_identifier, GLuint program) {
     if (!IsUsable())
         return;
-    if (!GLAD_GL_ARB_get_program_binary) {
-        LOG_WARNING(Render_OpenGL, "ARB_get_program_binary is not supported. Problems may occur if "
-                                   "use_disk_shader_cache is ON.");
-    }
 
     GLint binary_length{};
     glGetProgramiv(program, GL_PROGRAM_BINARY_LENGTH, &binary_length);
@@ -424,9 +422,6 @@ void ShaderDiskCache::SaveDumpToFile(u64 unique_identifier, GLuint program, bool
 
     GLint binary_length{};
     glGetProgramiv(program, GL_PROGRAM_BINARY_LENGTH, &binary_length);
-
-    if (!binary_length)
-        return;
 
     GLenum binary_format{};
     std::vector<u8> binary(binary_length);

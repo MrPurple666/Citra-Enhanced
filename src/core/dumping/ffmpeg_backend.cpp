@@ -7,10 +7,10 @@
 #include "common/file_util.h"
 #include "common/logging/log.h"
 #include "common/param_package.h"
+#include "common/settings.h"
 #include "common/string_util.h"
 #include "core/dumping/ffmpeg_backend.h"
 #include "core/hw/gpu.h"
-#include "core/settings.h"
 #include "video_core/renderer_base.h"
 #include "video_core/video_core.h"
 
@@ -354,7 +354,7 @@ void FFmpegAudioStream::ProcessFrame(const VariableAudioFrame& channel0,
     }
 
     auto resampled_count = swr_convert(swr_context.get(), dst_data.data(), frame_size - offset,
-                                       src_data.data(), channel0.size());
+                                       src_data.data(), static_cast<int>(channel0.size()));
     if (resampled_count < 0) {
         LOG_ERROR(Render, "Audio frame dropped: Could not resample data");
         return;
@@ -760,7 +760,12 @@ void GetOptionList(std::vector<OptionInfo>& out, const AVClass* av_class, bool s
     }
 
     const AVClass* child_class = nullptr;
+#if LIBAVCODEC_VERSION_MAJOR >= 59
+    void* iter = nullptr;
+    while ((child_class = av_opt_child_class_iterate(av_class, &iter))) {
+#else
     while ((child_class = av_opt_child_class_next(av_class, child_class))) {
+#endif
         GetOptionListSingle(out, child_class);
     }
 }

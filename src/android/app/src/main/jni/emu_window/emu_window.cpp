@@ -11,7 +11,7 @@
 #include <glad/glad.h>
 
 #include "common/logging/log.h"
-#include "core/settings.h"
+#include "common/settings.h"
 #include "input_common/main.h"
 #include "jni/emu_window/emu_window.h"
 #include "jni/id_cache.h"
@@ -75,10 +75,6 @@ static void UpdateLandscapeScreenLayout() {
     Settings::values.layout_option =
         static_cast<Settings::LayoutOption>(IDCache::GetEnvForThread()->CallStaticIntMethod(
             IDCache::GetNativeLibraryClass(), IDCache::GetLandscapeScreenLayout()));
-}
-
-void EmuWindow_Android::UpdateLayout() {
-    UpdateCurrentFramebufferLayout(window_width, window_height);
 }
 
 void EmuWindow_Android::OnSurfaceChanged(ANativeWindow* surface) {

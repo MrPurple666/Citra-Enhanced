@@ -8,9 +8,9 @@
 #include "common/microprofile.h"
 #include "common/swap.h"
 #include "core/core.h"
+#include "core/file_sys/plugin_3gx.h"
 #include "core/hle/ipc.h"
 #include "core/hle/ipc_helpers.h"
-#include "core/hle/kernel/handle_table.h"
 #include "core/hle/kernel/shared_memory.h"
 #include "core/hle/kernel/shared_page.h"
 #include "core/hle/result.h"
@@ -32,7 +32,7 @@ GraphicsDebugger g_debugger;
 namespace Service::GSP {
 
 // Beginning address of HW regs
-const u32 REGS_BEGIN = 0x1EB00000;
+constexpr u32 REGS_BEGIN = 0x1EB00000;
 
 namespace ErrCodes {
 enum {
@@ -71,6 +71,9 @@ static PAddr VirtualToPhysicalAddress(VAddr addr) {
     if (addr >= Memory::NEW_LINEAR_HEAP_VADDR && addr <= Memory::NEW_LINEAR_HEAP_VADDR_END) {
         return addr - Memory::NEW_LINEAR_HEAP_VADDR + Memory::FCRAM_PADDR;
     }
+    if (addr >= Memory::PLUGIN_3GX_FB_VADDR && addr <= Memory::PLUGIN_3GX_FB_VADDR_END) {
+        return addr - Memory::PLUGIN_3GX_FB_VADDR + Service::PLGLDR::PLG_LDR::GetPluginFBAddr();
+    }
 
     LOG_ERROR(HW_Memory, "Unknown virtual address @ 0x{:08X}", addr);
     // To help with debugging, set bit on address so that it's obviously invalid.
@@ -78,12 +81,14 @@ static PAddr VirtualToPhysicalAddress(VAddr addr) {
     return addr | 0x80000000;
 }
 
-u32 GSP_GPU::GetUnusedThreadId() {
+u32 GSP_GPU::GetUnusedThreadId() const {
     for (u32 id = 0; id < MaxGSPThreads; ++id) {
         if (!used_thread_ids[id])
             return id;
     }
-    ASSERT_MSG(false, "All GSP threads are in use");
+
+    UNREACHABLE_MSG("All GSP threads are in use");
+    return 0;
 }
 
 /// Gets a pointer to a thread command buffer in GSP shared memory
@@ -109,9 +114,10 @@ static inline InterruptRelayQueue* GetInterruptRelayQueue(
 }
 
 void GSP_GPU::ClientDisconnected(std::shared_ptr<Kernel::ServerSession> server_session) {
-    SessionData* session_data = GetSessionData(server_session);
-    if (active_thread_id == session_data->thread_id)
+    const SessionData* session_data = GetSessionData(server_session);
+    if (active_thread_id == session_data->thread_id) {
         ReleaseRight(session_data);
+    }
     SessionRequestHandler::ClientDisconnected(server_session);
 }
 
@@ -283,29 +289,29 @@ ResultCode SetBufferSwap(u32 screen_id, const FrameBufferInfo& info) {
     PAddr phys_address_left = VirtualToPhysicalAddress(info.address_left);
     PAddr phys_address_right = VirtualToPhysicalAddress(info.address_right);
     if (info.active_fb == 0) {
-        WriteSingleHWReg(base_address + 4 * static_cast<u32>(GPU_REG_INDEX(
-                                                framebuffer_config[screen_id].address_left1)),
+        WriteSingleHWReg(base_address + 4 * static_cast<u32>(GPU_FRAMEBUFFER_REG_INDEX(
+                                                screen_id, address_left1)),
                          phys_address_left);
-        WriteSingleHWReg(base_address + 4 * static_cast<u32>(GPU_REG_INDEX(
-                                                framebuffer_config[screen_id].address_right1)),
+        WriteSingleHWReg(base_address + 4 * static_cast<u32>(GPU_FRAMEBUFFER_REG_INDEX(
+                                                screen_id, address_right1)),
                          phys_address_right);
     } else {
-        WriteSingleHWReg(base_address + 4 * static_cast<u32>(GPU_REG_INDEX(
-                                                framebuffer_config[screen_id].address_left2)),
+        WriteSingleHWReg(base_address + 4 * static_cast<u32>(GPU_FRAMEBUFFER_REG_INDEX(
+                                                screen_id, address_left2)),
                          phys_address_left);
-        WriteSingleHWReg(base_address + 4 * static_cast<u32>(GPU_REG_INDEX(
-                                                framebuffer_config[screen_id].address_right2)),
+        WriteSingleHWReg(base_address + 4 * static_cast<u32>(GPU_FRAMEBUFFER_REG_INDEX(
+                                                screen_id, address_right2)),
                          phys_address_right);
     }
     WriteSingleHWReg(base_address +
-                         4 * static_cast<u32>(GPU_REG_INDEX(framebuffer_config[screen_id].stride)),
+                         4 * static_cast<u32>(GPU_FRAMEBUFFER_REG_INDEX(screen_id, stride)),
                      info.stride);
-    WriteSingleHWReg(base_address + 4 * static_cast<u32>(GPU_REG_INDEX(
-                                            framebuffer_config[screen_id].color_format)),
+    WriteSingleHWReg(base_address +
+                         4 * static_cast<u32>(GPU_FRAMEBUFFER_REG_INDEX(screen_id, color_format)),
                      info.format);
-    WriteSingleHWReg(
-        base_address + 4 * static_cast<u32>(GPU_REG_INDEX(framebuffer_config[screen_id].active_fb)),
-        info.shown_fb);
+    WriteSingleHWReg(base_address +
+                         4 * static_cast<u32>(GPU_FRAMEBUFFER_REG_INDEX(screen_id, active_fb)),
+                     info.shown_fb);
 
     if (screen_id == 0) {
         MicroProfileFlip();
@@ -432,8 +438,9 @@ void GSP_GPU::SignalInterruptForThread(InterruptId interrupt_id, u32 thread_id) 
     //               executing any GSP commands, only waiting on the event.
     // TODO(Subv): The real GSP module triggers PDC0 after updating both the top and bottom
     // screen, it is currently unknown what PDC1 does.
-    int screen_id =
-        (interrupt_id == InterruptId::PDC0) ? 0 : (interrupt_id == InterruptId::PDC1) ? 1 : -1;
+    int screen_id = (interrupt_id == InterruptId::PDC0)   ? 0
+                    : (interrupt_id == InterruptId::PDC1) ? 1
+                                                          : -1;
     if (screen_id != -1) {
         FrameBufferUpdate* info = GetFrameBufferInfo(thread_id, screen_id);
         if (info->is_dirty) {
@@ -467,8 +474,9 @@ void GSP_GPU::SignalInterrupt(InterruptId interrupt_id) {
     }
 
     // For normal interrupts, don't do anything if no process has acquired the GPU right.
-    if (active_thread_id == -1)
+    if (active_thread_id == UINT32_MAX) {
         return;
+    }
 
     SignalInterruptForThread(interrupt_id, active_thread_id);
 }
@@ -705,23 +713,23 @@ void GSP_GPU::AcquireRight(Kernel::HLERequestContext& ctx) {
     }
 
     // TODO(Subv): This case should put the caller thread to sleep until the right is released.
-    ASSERT_MSG(active_thread_id == -1, "GPU right has already been acquired");
+    ASSERT_MSG(active_thread_id == UINT32_MAX, "GPU right has already been acquired");
 
     active_thread_id = session_data->thread_id;
 
     rb.Push(RESULT_SUCCESS);
 }
 
-void GSP_GPU::ReleaseRight(SessionData* session_data) {
+void GSP_GPU::ReleaseRight(const SessionData* session_data) {
     ASSERT_MSG(active_thread_id == session_data->thread_id,
                "Wrong thread tried to release GPU right");
-    active_thread_id = -1;
+    active_thread_id = UINT32_MAX;
 }
 
 void GSP_GPU::ReleaseRight(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx, 0x17, 0, 0);
 
-    SessionData* session_data = GetSessionData(ctx.Session());
+    const SessionData* session_data = GetSessionData(ctx.Session());
     ReleaseRight(session_data);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);

@@ -10,31 +10,40 @@
 #include "citra_qt/camera/qt_multimedia_camera.h"
 #include "citra_qt/main.h"
 
+#if defined(__APPLE__)
+#include "citra_qt/macos_authorization.h"
+#endif
+
 namespace Camera {
 
 QList<QVideoFrame::PixelFormat> QtCameraSurface::supportedPixelFormats(
-    QAbstractVideoBuffer::HandleType handleType) const {
-    Q_UNUSED(handleType);
+    [[maybe_unused]] QAbstractVideoBuffer::HandleType handleType) const {
     return QList<QVideoFrame::PixelFormat>()
-           << QVideoFrame::Format_ARGB32 << QVideoFrame::Format_ARGB32_Premultiplied
-           << QVideoFrame::Format_RGB32 << QVideoFrame::Format_RGB24 << QVideoFrame::Format_RGB565
-           << QVideoFrame::Format_RGB555 << QVideoFrame::Format_ARGB8565_Premultiplied
-           << QVideoFrame::Format_BGRA32 << QVideoFrame::Format_BGRA32_Premultiplied
-           << QVideoFrame::Format_BGR32 << QVideoFrame::Format_BGR24 << QVideoFrame::Format_BGR565
-           << QVideoFrame::Format_BGR555 << QVideoFrame::Format_BGRA5658_Premultiplied
-           << QVideoFrame::Format_AYUV444 << QVideoFrame::Format_AYUV444_Premultiplied
-           << QVideoFrame::Format_YUV444 << QVideoFrame::Format_YUV420P << QVideoFrame::Format_YV12
-           << QVideoFrame::Format_UYVY << QVideoFrame::Format_YUYV << QVideoFrame::Format_NV12
-           << QVideoFrame::Format_NV21 << QVideoFrame::Format_IMC1 << QVideoFrame::Format_IMC2
-           << QVideoFrame::Format_IMC3 << QVideoFrame::Format_IMC4 << QVideoFrame::Format_Y8
-           << QVideoFrame::Format_Y16 << QVideoFrame::Format_Jpeg << QVideoFrame::Format_CameraRaw
-           << QVideoFrame::Format_AdobeDng; // Supporting all the formats
+           << QVideoFrame::Format_RGB32 << QVideoFrame::Format_RGB24
+           << QVideoFrame::Format_ARGB32_Premultiplied << QVideoFrame::Format_ARGB32
+           << QVideoFrame::Format_RGB565 << QVideoFrame::Format_RGB555
+           << QVideoFrame::Format_Jpeg
+           // the following formats are supported via Qt internal conversions
+           << QVideoFrame::Format_ARGB8565_Premultiplied << QVideoFrame::Format_BGRA32
+           << QVideoFrame::Format_BGRA32_Premultiplied << QVideoFrame::Format_BGR32
+           << QVideoFrame::Format_BGR24 << QVideoFrame::Format_BGR565 << QVideoFrame::Format_BGR555
+           << QVideoFrame::Format_AYUV444 << QVideoFrame::Format_YUV444
+           << QVideoFrame::Format_YUV420P << QVideoFrame::Format_YV12 << QVideoFrame::Format_UYVY
+           << QVideoFrame::Format_YUYV << QVideoFrame::Format_NV12
+           << QVideoFrame::Format_NV21; // Supporting all the QImage convertible formats, ordered by
+                                        // QImage decoding performance
 }
 
 bool QtCameraSurface::present(const QVideoFrame& frame) {
     if (!frame.isValid()) {
         return false;
     }
+#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
+    QMutexLocker locker(&mutex);
+    // In Qt 5.15, the image is already flipped
+    current_frame = frame.image();
+    locker.unlock();
+#else
     QVideoFrame cloneFrame(frame);
     cloneFrame.map(QAbstractVideoBuffer::ReadOnly);
     const QImage image(cloneFrame.bits(), cloneFrame.width(), cloneFrame.height(),
@@ -43,6 +52,7 @@ bool QtCameraSurface::present(const QVideoFrame& frame) {
     current_frame = image.mirrored(true, true);
     locker.unlock();
     cloneFrame.unmap();
+#endif
     return true;
 }
 
@@ -121,9 +131,8 @@ std::unordered_map<std::string, std::shared_ptr<QtMultimediaCameraHandler>>
     QtMultimediaCameraHandler::loaded;
 
 void QtMultimediaCameraHandler::Init() {
-    for (auto& handler : handlers) {
-        handler = std::make_shared<QtMultimediaCameraHandler>();
-    }
+    std::generate(std::begin(handlers), std::end(handlers),
+                  std::make_shared<QtMultimediaCameraHandler>);
 }
 
 std::shared_ptr<QtMultimediaCameraHandler> QtMultimediaCameraHandler::GetHandler(
@@ -188,9 +197,16 @@ void QtMultimediaCameraHandler::StopCamera() {
 }
 
 void QtMultimediaCameraHandler::StartCamera() {
+#if defined(__APPLE__)
+    if (!AppleAuthorization::CheckAuthorizationForCamera()) {
+        LOG_ERROR(Service_CAM, "Unable to start camera due to lack of authorization");
+        return;
+    }
+#endif
     camera->setViewfinderSettings(settings);
     camera->start();
     started = true;
+    paused = false;
 }
 
 bool QtMultimediaCameraHandler::CameraAvailable() const {
@@ -202,13 +218,14 @@ void QtMultimediaCameraHandler::StopCameras() {
     for (auto& handler : handlers) {
         if (handler && handler->started) {
             handler->StopCamera();
+            handler->paused = true;
         }
     }
 }
 
 void QtMultimediaCameraHandler::ResumeCameras() {
     for (auto& handler : handlers) {
-        if (handler && handler->started) {
+        if (handler && handler->paused) {
             handler->StartCamera();
         }
     }
@@ -220,6 +237,7 @@ void QtMultimediaCameraHandler::ReleaseHandlers() {
     for (std::size_t i = 0; i < handlers.size(); i++) {
         status[i] = false;
         handlers[i]->started = false;
+        handlers[i]->paused = false;
     }
 }
 

@@ -9,13 +9,15 @@
 #include <QMessageBox>
 #include <QWidget>
 #include "citra_qt/configuration/configure_camera.h"
-#include "citra_qt/uisettings.h"
-#include "core/core.h"
+#include "common/settings.h"
 #include "core/frontend/camera/factory.h"
 #include "core/frontend/camera/interface.h"
 #include "core/hle/service/cam/cam.h"
-#include "core/settings.h"
 #include "ui_configure_camera.h"
+
+#if defined(__APPLE__)
+#include "citra_qt/macos_authorization.h"
+#endif
 
 const std::array<std::string, 3> ConfigureCamera::Implementations = {
     "blank", /* Blank */
@@ -46,9 +48,15 @@ ConfigureCamera::~ConfigureCamera() {
 
 void ConfigureCamera::ConnectEvents() {
     connect(ui->image_source,
-            static_cast<void (QComboBox::*)(int)>(&QComboBox::currentIndexChanged), this, [this] {
+            static_cast<void (QComboBox::*)(int)>(&QComboBox::currentIndexChanged), this,
+            [this](int index) {
                 StopPreviewing();
                 UpdateImageSourceUI();
+#if defined(__APPLE__)
+                if (index == 2) {
+                    AppleAuthorization::CheckAuthorizationForCamera();
+                }
+#endif
             });
     connect(ui->camera_selection,
             static_cast<void (QComboBox::*)(int)>(&QComboBox::currentIndexChanged), this, [this] {
@@ -81,7 +89,7 @@ void ConfigureCamera::ConnectEvents() {
                 SetConfiguration();
             });
     connect(ui->toolButton, &QToolButton::clicked, this, &ConfigureCamera::OnToolButtonClicked);
-    connect(ui->preview_button, &QPushButton::clicked, this, [=] { StartPreviewing(); });
+    connect(ui->preview_button, &QPushButton::clicked, this, [this] { StartPreviewing(); });
     connect(ui->prompt_before_load, &QCheckBox::stateChanged, this, [this](int state) {
         ui->camera_file->setDisabled(state == Qt::Checked);
         ui->toolButton->setDisabled(state == Qt::Checked);
@@ -89,12 +97,11 @@ void ConfigureCamera::ConnectEvents() {
             ui->camera_file->setText(QString{});
         }
     });
-    connect(ui->camera_file, &QLineEdit::textChanged, this, [=] { StopPreviewing(); });
-    connect(ui->system_camera,
-            static_cast<void (QComboBox::*)(int)>(&QComboBox::currentIndexChanged), this,
-            [=] { StopPreviewing(); });
-    connect(ui->camera_flip, static_cast<void (QComboBox::*)(int)>(&QComboBox::currentIndexChanged),
-            this, [=] { StopPreviewing(); });
+    connect(ui->camera_file, &QLineEdit::textChanged, this, [this] { StopPreviewing(); });
+    connect(ui->system_camera, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this] { StopPreviewing(); });
+    connect(ui->camera_flip, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this] { StopPreviewing(); });
 }
 
 void ConfigureCamera::UpdateCameraMode() {
@@ -184,7 +191,7 @@ void ConfigureCamera::StartPreviewing() {
     ui->preview_box->setHidden(false);
     ui->preview_button->setHidden(true);
     preview_width = ui->preview_box->size().width();
-    preview_height = preview_width * 0.75;
+    preview_height = static_cast<int>(preview_width * 0.75);
     ui->preview_box->setToolTip(
         tr("Resolution: %1*%2")
             .arg(QString::number(preview_width), QString::number(preview_height)));
@@ -232,7 +239,7 @@ void ConfigureCamera::timerEvent(QTimerEvent* event) {
     }
     std::vector<u16> frame = previewing_camera->ReceiveFrame();
     int width = ui->preview_box->size().width();
-    int height = width * 0.75;
+    int height = static_cast<int>(width * 0.75);
     if (width != preview_width || height != preview_height) {
         StopPreviewing();
         return;
@@ -246,7 +253,7 @@ void ConfigureCamera::SetConfiguration() {
     int index = GetSelectedCameraIndex();
     for (std::size_t i = 0; i < Implementations.size(); i++) {
         if (Implementations[i] == camera_name[index]) {
-            ui->image_source->setCurrentIndex(i);
+            ui->image_source->setCurrentIndex(static_cast<int>(i));
         }
     }
     if (camera_name[index] == "image") {

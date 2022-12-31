@@ -41,6 +41,7 @@
 #include "core/hle/service/nfc/nfc.h"
 #include "core/hle/service/nim/nim.h"
 #include "core/hle/service/nwm/nwm.h"
+#include "core/hle/service/plgldr/plgldr.h"
 #include "core/hle/service/pm/pm.h"
 #include "core/hle/service/ps/ps_ps.h"
 #include "core/hle/service/ptm/ptm.h"
@@ -55,7 +56,7 @@
 
 namespace Service {
 
-const std::array<ServiceModuleInfo, 40> service_module_map{
+const std::array<ServiceModuleInfo, 41> service_module_map{
     {{"FS", 0x00040130'00001102, FS::InstallInterfaces},
      {"PM", 0x00040130'00001202, PM::InstallInterfaces},
      {"LDR", 0x00040130'00003702, LDR::InstallInterfaces},
@@ -94,6 +95,7 @@ const std::array<ServiceModuleInfo, 40> service_module_map{
      {"SOC", 0x00040130'00002E02, SOC::InstallInterfaces},
      {"SSL", 0x00040130'00002F02, SSL::InstallInterfaces},
      {"PS", 0x00040130'00003102, PS::InstallInterfaces},
+     {"PLGLDR", 0x00040130'00006902, PLGLDR::InstallInterfaces},
      // no HLE implementation
      {"CDC", 0x00040130'00001802, nullptr},
      {"GPIO", 0x00040130'00001B02, nullptr},
@@ -150,15 +152,15 @@ void ServiceFrameworkBase::ReportUnimplementedFunction(u32* cmd_buf, const Funct
     int num_params = header.normal_params_size + header.translate_params_size;
     std::string function_name = info == nullptr ? fmt::format("{:#08x}", cmd_buf[0]) : info->name;
 
-    fmt::memory_buffer buf;
-    fmt::format_to(buf, "function '{}': port='{}' cmd_buf={{[0]={:#x}", function_name, service_name,
-                   cmd_buf[0]);
+    std::string result = fmt::format("function '{}': port='{}' cmd_buf={{[0]={:#x}", function_name,
+                                     service_name, cmd_buf[0]);
     for (int i = 1; i <= num_params; ++i) {
-        fmt::format_to(buf, ", [{}]={:#x}", i, cmd_buf[i]);
+        result += fmt::format(", [{}]={:#x}", i, cmd_buf[i]);
     }
-    buf.push_back('}');
 
-    LOG_ERROR(Service, "unknown / unimplemented {}", fmt::to_string(buf));
+    result.push_back('}');
+
+    LOG_ERROR(Service, "unknown / unimplemented {}", result);
     // TODO(bunnei): Hack - ignore error
     header.normal_params_size.Assign(1);
     header.translate_params_size.Assign(0);

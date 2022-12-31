@@ -13,11 +13,12 @@
 #include "common/file_util.h"
 #include "common/logging/log.h"
 #include "common/param_package.h"
+#include "common/settings.h"
 #include "core/frontend/mic.h"
 #include "core/hle/service/service.h"
-#include "core/settings.h"
 #include "input_common/main.h"
 #include "input_common/udp/client.h"
+#include "network/network_settings.h"
 
 Config::Config() {
     // TODO: Don't hardcode the path; let the frontend decide where to put the config files.
@@ -127,24 +128,23 @@ void Config::ReadValues() {
         sdl2_config->GetBoolean("Renderer", "use_disk_shader_cache", true);
     Settings::values.frame_limit =
         static_cast<u16>(sdl2_config->GetInteger("Renderer", "frame_limit", 100));
-    Settings::values.use_frame_limit_alternate =
-        sdl2_config->GetBoolean("Renderer", "use_frame_limit_alternate", false);
-    Settings::values.frame_limit_alternate =
-        static_cast<u16>(sdl2_config->GetInteger("Renderer", "frame_limit_alternate", 200));
     Settings::values.use_vsync_new =
         static_cast<u16>(sdl2_config->GetInteger("Renderer", "use_vsync_new", 1));
     Settings::values.texture_filter_name =
         sdl2_config->GetString("Renderer", "texture_filter_name", "none");
 
+    Settings::values.mono_render_option = static_cast<Settings::MonoRenderOption>(
+        sdl2_config->GetInteger("Renderer", "mono_render_option", 0));
     Settings::values.render_3d = static_cast<Settings::StereoRenderOption>(
         sdl2_config->GetInteger("Renderer", "render_3d", 0));
     Settings::values.factor_3d =
         static_cast<u8>(sdl2_config->GetInteger("Renderer", "factor_3d", 0));
     std::string default_shader = "none (builtin)";
-    if (Settings::values.render_3d == Settings::StereoRenderOption::Anaglyph)
+    if (Settings::values.render_3d.GetValue() == Settings::StereoRenderOption::Anaglyph)
         default_shader = "dubois (builtin)";
-    else if (Settings::values.render_3d == Settings::StereoRenderOption::Interlaced ||
-             Settings::values.render_3d == Settings::StereoRenderOption::ReverseInterlaced)
+    else if (Settings::values.render_3d.GetValue() == Settings::StereoRenderOption::Interlaced ||
+             Settings::values.render_3d.GetValue() ==
+                 Settings::StereoRenderOption::ReverseInterlaced)
         default_shader = "horizontal (builtin)";
     Settings::values.pp_shader_name =
         sdl2_config->GetString("Renderer", "pp_shader_name", default_shader);
@@ -185,9 +185,8 @@ void Config::ReadValues() {
         sdl2_config->GetBoolean("Utility", "preload_textures", false);
 
     // Audio
-    Settings::values.enable_dsp_lle = sdl2_config->GetBoolean("Audio", "enable_dsp_lle", false);
-    Settings::values.enable_dsp_lle_multithread =
-        sdl2_config->GetBoolean("Audio", "enable_dsp_lle_multithread", false);
+    Settings::values.audio_emulation = static_cast<Settings::AudioEmulation>(
+        sdl2_config->GetInteger("Audio", "audio_emulation", 0));
     Settings::values.sink_id = sdl2_config->GetString("Audio", "output_engine", "auto");
     Settings::values.enable_audio_stretching =
         sdl2_config->GetBoolean("Audio", "enable_audio_stretching", true);
@@ -202,14 +201,15 @@ void Config::ReadValues() {
     Settings::values.use_virtual_sd =
         sdl2_config->GetBoolean("Data Storage", "use_virtual_sd", true);
 
-    const std::string default_nand_dir = FileUtil::GetDefaultUserPath(FileUtil::UserPath::NANDDir);
-    FileUtil::UpdateUserPath(
-        FileUtil::UserPath::NANDDir,
-        sdl2_config->GetString("Data Storage", "nand_directory", default_nand_dir));
-    const std::string default_sdmc_dir = FileUtil::GetDefaultUserPath(FileUtil::UserPath::SDMCDir);
-    FileUtil::UpdateUserPath(
-        FileUtil::UserPath::SDMCDir,
-        sdl2_config->GetString("Data Storage", "sdmc_directory", default_sdmc_dir));
+    Settings::values.use_custom_storage =
+        sdl2_config->GetBoolean("Data Storage", "use_custom_storage", false);
+
+    if (Settings::values.use_custom_storage) {
+        FileUtil::UpdateUserPath(FileUtil::UserPath::NANDDir,
+                                 sdl2_config->GetString("Data Storage", "nand_directory", ""));
+        FileUtil::UpdateUserPath(FileUtil::UserPath::SDMCDir,
+                                 sdl2_config->GetString("Data Storage", "sdmc_directory", ""));
+    }
 
     // System
     Settings::values.is_new_3ds = sdl2_config->GetBoolean("System", "is_new_3ds", true);
@@ -236,6 +236,58 @@ void Config::ReadValues() {
             std::chrono::duration_cast<std::chrono::seconds>(
                 std::chrono::system_clock::from_time_t(std::mktime(&t)).time_since_epoch())
                 .count();
+    }
+
+    {
+        constexpr const char* default_init_time_offset = "0 00:00:00";
+
+        std::string offset_string =
+            sdl2_config->GetString("System", "init_time_offset", default_init_time_offset);
+
+        size_t sep_index = offset_string.find(' ');
+
+        if (sep_index == std::string::npos) {
+            LOG_ERROR(Config, "Failed to parse init_time_offset. Using 0 00:00:00");
+            offset_string = default_init_time_offset;
+
+            sep_index = offset_string.find(' ');
+        }
+
+        std::string day_string = offset_string.substr(0, sep_index);
+        long long days = 0;
+
+        try {
+            days = std::stoll(day_string);
+        } catch (std::logic_error&) {
+            LOG_ERROR(Config, "Failed to parse days in init_time_offset. Using 0");
+            days = 0;
+        }
+
+        long long days_in_seconds = days * 86400;
+
+        std::tm t;
+        t.tm_sec = 0;
+        t.tm_min = 0;
+        t.tm_hour = 0;
+        t.tm_mday = 1;
+        t.tm_mon = 0;
+        t.tm_year = 100;
+        t.tm_isdst = 0;
+
+        std::istringstream string_stream(offset_string.substr(sep_index + 1));
+        string_stream >> std::get_time(&t, "%H:%M:%S");
+
+        if (string_stream.fail()) {
+            LOG_ERROR(Config,
+                      "Failed to parse hours, minutes and seconds in init_time_offset. 00:00:00");
+        }
+
+        auto time_offset =
+            std::chrono::system_clock::from_time_t(std::mktime(&t)).time_since_epoch();
+
+        auto secs = std::chrono::duration_cast<std::chrono::seconds>(time_offset).count();
+
+        Settings::values.init_time_offset = static_cast<long long>(secs) + days_in_seconds;
     }
 
     // Camera
@@ -275,12 +327,12 @@ void Config::ReadValues() {
     }
 
     // Web Service
-    Settings::values.enable_telemetry =
+    NetSettings::values.enable_telemetry =
         sdl2_config->GetBoolean("WebService", "enable_telemetry", true);
-    Settings::values.web_api_url =
+    NetSettings::values.web_api_url =
         sdl2_config->GetString("WebService", "web_api_url", "https://api.citra-emu.org");
-    Settings::values.citra_username = sdl2_config->GetString("WebService", "citra_username", "");
-    Settings::values.citra_token = sdl2_config->GetString("WebService", "citra_token", "");
+    NetSettings::values.citra_username = sdl2_config->GetString("WebService", "citra_username", "");
+    NetSettings::values.citra_token = sdl2_config->GetString("WebService", "citra_token", "");
 
     // Video Dumping
     Settings::values.output_format =

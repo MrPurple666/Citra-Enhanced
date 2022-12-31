@@ -205,7 +205,7 @@ public:
     // printing the character '{' is desirable. Ditto for }} and '}',
     // etc).
     template <typename... Args>
-    void AddLine(std::string_view text, Args&&... args) {
+    void AddLine(fmt::format_string<Args...> text, Args&&... args) {
         AddExpression(fmt::format(text, std::forward<Args>(args)...));
         AddNewLine();
     }
@@ -236,7 +236,7 @@ private:
 template <SwizzlePattern::Selector (SwizzlePattern::*getter)(int) const>
 std::string GetSelectorSrc(const SwizzlePattern& pattern) {
     std::string out;
-    for (std::size_t i = 0; i < 4; ++i) {
+    for (int i = 0; i < 4; ++i) {
         switch ((pattern.*getter)(i)) {
         case SwizzlePattern::Selector::x:
             out += 'x';
@@ -629,9 +629,9 @@ private:
                 std::string dest_reg =
                     (instr.mad.dest.Value() < 0x10)
                         ? outputreg_getter(static_cast<u32>(instr.mad.dest.Value().GetIndex()))
-                        : (instr.mad.dest.Value() < 0x20)
-                              ? "reg_tmp" + std::to_string(instr.mad.dest.Value().GetIndex())
-                              : "";
+                    : (instr.mad.dest.Value() < 0x20)
+                        ? "reg_tmp" + std::to_string(instr.mad.dest.Value().GetIndex())
+                        : "";
 
                 if (sanitize_mul) {
                     SetDest(swizzle, dest_reg,

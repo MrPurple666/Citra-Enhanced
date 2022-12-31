@@ -3,12 +3,12 @@
 // Refer to the license.txt file included.
 
 #include "common/alignment.h"
+#include "common/settings.h"
 #include "common/string_util.h"
 #include "core/core.h"
 #include "core/core_timing.h"
 #include "core/hle/service/ir/extra_hid.h"
 #include "core/movie.h"
-#include "core/settings.h"
 
 namespace Service::IR {
 
@@ -198,7 +198,7 @@ void ExtraHID::HandleReadCalibrationDataRequest(const std::vector<u8>& request_b
     const u16 offset = Common::AlignDown(request.offset, 16);
     const u16 size = Common::AlignDown(request.size, 16);
 
-    if (offset + size > calibration_data.size()) {
+    if (static_cast<std::size_t>(offset + size) > calibration_data.size()) {
         LOG_ERROR(Service_IR, "Read beyond the end of calibration data! (offset={}, size={})",
                   offset, size);
         return;

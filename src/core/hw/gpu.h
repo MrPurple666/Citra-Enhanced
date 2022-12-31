@@ -30,6 +30,14 @@ constexpr double SCREEN_REFRESH_RATE = BASE_CLOCK_RATE_ARM11 / static_cast<doubl
 // Returns index corresponding to the Regs member labeled by field_name
 #define GPU_REG_INDEX(field_name) (offsetof(GPU::Regs, field_name) / sizeof(u32))
 
+// Returns index corresponding to the Regs::FramebufferConfig labeled by field_name
+// screen_id is a subscript for Regs::framebuffer_config
+#define GPU_FRAMEBUFFER_REG_INDEX(screen_id, field_name)                                           \
+    ((offsetof(GPU::Regs, framebuffer_config) +                                                    \
+      sizeof(GPU::Regs::FramebufferConfig) * (screen_id) +                                         \
+      offsetof(GPU::Regs::FramebufferConfig, field_name)) /                                        \
+     sizeof(u32))
+
 // MMIO region 0x1EFxxxxx
 struct Regs {
 
@@ -60,9 +68,11 @@ struct Regs {
         case PixelFormat::RGB5A1:
         case PixelFormat::RGBA4:
             return 2;
+        default:
+            UNREACHABLE();
         }
 
-        UNREACHABLE();
+        return 0;
     }
 
     INSERT_PADDING_WORDS(0x4);

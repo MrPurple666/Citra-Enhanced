@@ -12,11 +12,13 @@
 namespace IDCache {
 
 JNIEnv* GetEnvForThread();
-jclass GetNativeLibraryClass();
+
 jclass GetCoreErrorClass();
 jclass GetSavestateInfoClass();
 jclass GetDiskCacheProgressClass();
 jclass GetDiskCacheLoadCallbackStageClass();
+
+jclass GetNativeLibraryClass();
 jmethodID GetOnCoreError();
 jmethodID GetDisplayAlertMsg();
 jmethodID GetDisplayAlertPrompt();
@@ -27,7 +29,10 @@ jmethodID GetExitEmulationActivity();
 jmethodID GetRequestCameraPermission();
 jmethodID GetRequestMicPermission();
 jmethodID GetDiskCacheLoadProgress();
-jmethodID GetAddNetplayMessage();
+
+jclass GetCheatClass();
+jfieldID GetCheatPointer();
+jmethodID GetCheatConstructor();
 
 jobject GetJavaLoadCallbackStage(VideoCore::LoadCallbackStage stage);
 

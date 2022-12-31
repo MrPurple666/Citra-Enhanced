@@ -23,31 +23,34 @@ target_link_libraries(boost_serialization PUBLIC boost)
 
 # Add additional boost libs here; remember to ALIAS them in the root CMakeLists!
 
-# Catch
-add_library(catch-single-include INTERFACE)
-target_include_directories(catch-single-include INTERFACE catch/single_include)
+# Catch2
+set(CATCH_INSTALL_DOCS OFF)
+set(CATCH_INSTALL_EXTRAS OFF)
+add_subdirectory(catch2)
 
 # Crypto++
 add_subdirectory(cryptopp)
 
+# fmt and Xbyak need to be added before dynarmic
+# libfmt
+add_subdirectory(fmt)
+
 # Xbyak
 if (ARCHITECTURE_x86_64)
     add_library(xbyak INTERFACE)
-    target_include_directories(xbyak SYSTEM INTERFACE ./xbyak/xbyak)
+    file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/xbyak/include)
+    file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/xbyak/xbyak DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/xbyak/include)
+    target_include_directories(xbyak SYSTEM INTERFACE ${CMAKE_CURRENT_BINARY_DIR}/xbyak/include)
     target_compile_definitions(xbyak INTERFACE XBYAK_NO_OP_NAMES)
 endif()
 
 # Dynarmic
-if (ARCHITECTURE_x86_64 OR ARCHITECTURE_ARM64)
+if (ARCHITECTURE_x86_64 OR ARCHITECTURE_arm64)
     set(DYNARMIC_TESTS OFF)
     set(DYNARMIC_NO_BUNDLED_FMT ON)
     set(DYNARMIC_FRONTENDS "A32")
     add_subdirectory(dynarmic)
 endif()
-
-# libfmt
-add_subdirectory(fmt)
-add_library(fmt::fmt ALIAS fmt)
 
 # getopt
 if (MSVC)
@@ -79,7 +82,15 @@ target_include_directories(SoundTouch INTERFACE ./soundtouch/include)
 # Teakra
 add_subdirectory(teakra EXCLUDE_FROM_ALL)
 
+# SDL2
+if (ENABLE_SDL2 AND NOT USE_SYSTEM_SDL2)
+    add_subdirectory(sdl2)
+endif()
+
 # Zstandard
+set(ZSTD_LEGACY_SUPPORT OFF)
+set(ZSTD_BUILD_PROGRAMS OFF)
+set(ZSTD_BUILD_SHARED OFF)
 add_subdirectory(zstd/build/cmake EXCLUDE_FROM_ALL)
 target_include_directories(libzstd_static INTERFACE $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/externals/zstd/lib>)
 
@@ -100,18 +111,23 @@ if (USE_DISCORD_PRESENCE)
 endif()
 
 if (ENABLE_WEB_SERVICE)
-    # LibreSSL
-    set(LIBRESSL_SKIP_INSTALL ON CACHE BOOL "")
-    add_subdirectory(libressl EXCLUDE_FROM_ALL)
-    target_include_directories(ssl INTERFACE ./libressl/include)
-    target_compile_definitions(ssl PRIVATE -DHAVE_INET_NTOP)
-
+    find_package(OpenSSL 1.1)
+    if (OPENSSL_FOUND)
+        set(OPENSSL_LIBRARIES OpenSSL::SSL OpenSSL::Crypto)
+    else()
+        # LibreSSL
+        set(LIBRESSL_SKIP_INSTALL ON CACHE BOOL "")
+        set(OPENSSLDIR "/etc/ssl/")
+        add_subdirectory(libressl EXCLUDE_FROM_ALL)
+        target_include_directories(ssl INTERFACE ./libressl/include)
+        target_compile_definitions(ssl PRIVATE -DHAVE_INET_NTOP)
+        get_directory_property(OPENSSL_LIBRARIES
+            DIRECTORY libressl
+            DEFINITION OPENSSL_LIBS)
+    endif()
     # JSON
     add_library(json-headers INTERFACE)
     target_include_directories(json-headers INTERFACE ./json)
-
-    # lurlparser
-    add_subdirectory(lurlparser EXCLUDE_FROM_ALL)
 
     if(ANDROID)
         add_subdirectory(android-ifaddrs)
@@ -121,15 +137,20 @@ if (ENABLE_WEB_SERVICE)
     add_library(httplib INTERFACE)
     target_include_directories(httplib INTERFACE ./httplib)
     target_compile_options(httplib INTERFACE -DCPPHTTPLIB_OPENSSL_SUPPORT)
+    target_link_libraries(httplib INTERFACE ${OPENSSL_LIBRARIES})
 
     # cpp-jwt
     add_library(cpp-jwt INTERFACE)
     target_include_directories(cpp-jwt INTERFACE ./cpp-jwt/include)
+    target_compile_definitions(cpp-jwt INTERFACE CPP_JWT_USE_VENDORED_NLOHMANN_JSON)
 endif()
 
 # lodepng
 add_subdirectory(lodepng)
 
-# libyuv
-add_subdirectory(libyuv)
-target_include_directories(yuv INTERFACE ./libyuv/include)
+# (xperia64): Only use libyuv on Android b/c of build issues on Windows and mandatory JPEG
+if(ANDROID)
+    # libyuv
+    add_subdirectory(libyuv)
+    target_include_directories(yuv INTERFACE ./libyuv/include)
+endif()

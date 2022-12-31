@@ -140,19 +140,6 @@ use_disk_shader_cache =
 # factor for the 3DS resolution
 resolution_factor =
 
-# Show On-Screen Display messages, including FPS, VPS and Speed.
-# 0: Off (default), 1: On
-show_fps =
-
-# Adjust On-Screen Display messages size, including FPS counter.
-# 2: Default OSD scale, 3: duplicated OSD scale, 4: bigger scale
-# You can put more accurate values here.
-osd_size =
-
-# Enable limit usage for CPU, improve perfomance a little on some games
-# 0: Off (default), 1: On
-cpu_usage_limit =
-
 # Whether to enable V-Sync (caps the framerate at 60FPS) or not.
 # 0 (default): Off, 1: On
 vsync_enabled =
@@ -226,9 +213,11 @@ cardboard_y_shift =
 # Dumps textures as PNG to dump/textures/[Title ID]/.
 # 0 (default): Off, 1: On
 dump_textures =
+
 # Reads PNG files from load/textures/[Title ID]/ and replaces textures.
 # 0 (default): Off, 1: On
 custom_textures =
+
 # Loads all custom textures into memory before booting.
 # 0 (default): Off, 1: On
 preload_textures =
@@ -291,6 +280,11 @@ init_clock =
 # set to fixed time. Default 2000-01-01 00:00:01
 # Note: 3DS can only handle times later then Jan 1 2000
 init_time =
+
+# Plugin loader state, if enabled plugins will be loaded from the SD card.
+# You can also set if homebrew apps are allowed to enable the plugin loader
+plugin_loader =
+allow_plugin_loader =
 
 [Camera]
 # Which camera engine to use for the right outer camera

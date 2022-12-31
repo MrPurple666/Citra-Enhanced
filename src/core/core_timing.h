@@ -128,7 +128,7 @@ constexpr u64 cyclesToMs(s64 cycles) {
 
 namespace Core {
 
-using TimedCallback = std::function<void(u64 userdata, int cycles_late)>;
+using TimedCallback = std::function<void(std::uintptr_t user_data, int cycles_late)>;
 
 struct TimingEventType {
     TimedCallback callback;
@@ -141,7 +141,7 @@ public:
     struct Event {
         s64 time;
         u64 fifo_order;
-        u64 userdata;
+        std::uintptr_t user_data;
         const TimingEventType* type;
 
         bool operator>(const Event& right) const;
@@ -152,7 +152,7 @@ public:
         void save(Archive& ar, const unsigned int) const {
             ar& time;
             ar& fifo_order;
-            ar& userdata;
+            ar& user_data;
             std::string name = *(type->name);
             ar << name;
         }
@@ -161,7 +161,7 @@ public:
         void load(Archive& ar, const unsigned int) {
             ar& time;
             ar& fifo_order;
-            ar& userdata;
+            ar& user_data;
             std::string name;
             ar >> name;
             type = Global<Timing>().RegisterEvent(name, nullptr);
@@ -203,9 +203,10 @@ public:
 
         void MoveEvents();
 
-        void SetDowncountHack(u32 hack) {
-            downcount_hack = hack;
-        }
+        // Use these two functions to adjust the guest system tick on host blocking operations, so
+        // that the guest can tell how much time passed during the host call.
+        u32 StartAdjust();
+        void EndAdjust(u32 start_adjust_handle);
 
     private:
         friend class Timing;
@@ -231,7 +232,9 @@ public:
         s64 downcount = MAX_SLICE_LENGTH;
         s64 executed_ticks = 0;
         u64 idled_cycles = 0;
-        u32 downcount_hack = 0;
+
+        std::chrono::time_point<std::chrono::steady_clock> adjust_value_last;
+        u32 adjust_value_curr_handle = 0;
         // Stores a scaling for the internal clockspeed. Changing this number results in
         // under/overclocking the guest cpu
         double cpu_clock_scale = 1.0;
@@ -262,10 +265,11 @@ public:
      */
     TimingEventType* RegisterEvent(const std::string& name, TimedCallback callback);
 
-    void ScheduleEvent(s64 cycles_into_future, const TimingEventType* event_type, u64 userdata = 0,
+    void ScheduleEvent(s64 cycles_into_future, const TimingEventType* event_type,
+                       std::uintptr_t user_data = 0,
                        std::size_t core_id = std::numeric_limits<std::size_t>::max());
 
-    void UnscheduleEvent(const TimingEventType* event_type, u64 userdata);
+    void UnscheduleEvent(const TimingEventType* event_type, std::uintptr_t user_data);
 
     /// We only permit one event of each type in the queue at a time.
     void RemoveEvent(const TimingEventType* event_type);
@@ -285,6 +289,11 @@ public:
 
     std::shared_ptr<Timer> GetTimer(std::size_t cpu_id);
 
+    // Used after deserializing to unprotect the event queue.
+    void UnlockEventQueue() {
+        event_queue_locked = false;
+    }
+
 private:
     // unordered_map stores each element separately as a linked list node so pointers to
     // elements remain stable regardless of rehashes/resizing.
@@ -293,9 +302,9 @@ private:
     std::vector<std::shared_ptr<Timer>> timers;
     Timer* current_timer = nullptr;
 
-    // Stores a scaling for the internal clockspeed. Changing this number results in
-    // under/overclocking the guest cpu
-    double cpu_clock_scale = 1.0;
+    // When true, the event queue can't be modified. Used while deserializing to workaround
+    // destructor side effects.
+    bool event_queue_locked = false;
 
     template <class Archive>
     void serialize(Archive& ar, const unsigned int file_version) {
@@ -307,6 +316,9 @@ private:
             current_timer = x.get();
         } else {
             ar& current_timer;
+        }
+        if (Archive::is_loading::value) {
+            event_queue_locked = true;
         }
     }
     friend class boost::serialization::access;

@@ -7,12 +7,12 @@ if grep -nrI '\s$' src *.yml *.txt *.md Doxyfile .gitignore .gitmodules .ci* dis
 fi
 
 # Default clang-format points to default 3.5 version one
-CLANG_FORMAT=clang-format-10
+CLANG_FORMAT=clang-format-12
 $CLANG_FORMAT --version
 
-if [ "$TRAVIS_EVENT_TYPE" = "pull_request" ]; then
+if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
     # Get list of every file modified in this pull request
-    files_to_lint="$(git diff --name-only --diff-filter=ACMRTUXB $TRAVIS_COMMIT_RANGE | grep '^src/[^.]*[.]\(cpp\|h\)$' || true)"
+    files_to_lint="$(git diff --name-only --diff-filter=ACMRTUXB $COMMIT_RANGE | grep '^src/[^.]*[.]\(cpp\|h\)$' || true)"
 else
     # Check everything for branch pushes
     files_to_lint="$(find src/ -name '*.cpp' -or -name '*.h')"

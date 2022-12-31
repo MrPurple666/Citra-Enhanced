@@ -395,7 +395,7 @@ Loader::ResultStatus NCCHContainer::Load() {
                 exheader_header.arm11_system_local_caps.resource_limit_category;
 
             LOG_DEBUG(Service_FS, "Name:                        {}",
-                      exheader_header.codeset_info.name);
+                      reinterpret_cast<const char*>(exheader_header.codeset_info.name));
             LOG_DEBUG(Service_FS, "Program ID:                  {:016X}", ncch_header.program_id);
             LOG_DEBUG(Service_FS, "Code compressed:             {}", is_compressed ? "yes" : "no");
             LOG_DEBUG(Service_FS, "Entry point:                 0x{:08X}", entry_point);
@@ -559,15 +559,16 @@ Loader::ResultStatus NCCHContainer::LoadSectionExeFS(const char* name, std::vect
                 // Decompress .code section...
                 u32 decompressed_size = LZSS_GetDecompressedSize(&temp_buffer[0], section.size);
                 buffer.resize(decompressed_size);
-                if (!LZSS_Decompress(&temp_buffer[0], section.size, &buffer[0], decompressed_size))
+                if (!LZSS_Decompress(&temp_buffer[0], section.size, buffer.data(),
+                                     decompressed_size))
                     return Loader::ResultStatus::ErrorInvalidFormat;
             } else {
                 // Section is uncompressed...
                 buffer.resize(section.size);
-                if (exefs_file.ReadBytes(&buffer[0], section.size) != section.size)
+                if (exefs_file.ReadBytes(buffer.data(), section.size) != section.size)
                     return Loader::ResultStatus::Error;
                 if (is_encrypted) {
-                    dec.ProcessData(&buffer[0], &buffer[0], section.size);
+                    dec.ProcessData(buffer.data(), buffer.data(), section.size);
                 }
             }
 
@@ -646,7 +647,7 @@ Loader::ResultStatus NCCHContainer::LoadOverrideExeFSSection(const char* name,
             buffer.resize(section_size);
 
             section_file.Seek(0, SEEK_SET);
-            if (section_file.ReadBytes(&buffer[0], section_size) == section_size) {
+            if (section_file.ReadBytes(buffer.data(), section_size) == section_size) {
                 LOG_WARNING(Service_FS, "File {} overriding built-in ExeFS file", path);
                 return Loader::ResultStatus::Success;
             }

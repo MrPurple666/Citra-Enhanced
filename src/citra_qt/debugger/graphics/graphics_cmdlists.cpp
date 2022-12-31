@@ -14,7 +14,6 @@
 #include <QTreeView>
 #include <QVBoxLayout>
 #include "citra_qt/debugger/graphics/graphics_cmdlists.h"
-#include "citra_qt/util/spinbox.h"
 #include "citra_qt/util/util.h"
 #include "common/vector_math.h"
 #include "core/core.h"
@@ -57,11 +56,11 @@ public:
 
 GPUCommandListModel::GPUCommandListModel(QObject* parent) : QAbstractListModel(parent) {}
 
-int GPUCommandListModel::rowCount(const QModelIndex& parent) const {
+int GPUCommandListModel::rowCount([[maybe_unused]] const QModelIndex& parent) const {
     return static_cast<int>(pica_trace.writes.size());
 }
 
-int GPUCommandListModel::columnCount(const QModelIndex& parent) const {
+int GPUCommandListModel::columnCount([[maybe_unused]] const QModelIndex& parent) const {
     return 4;
 }
 
@@ -89,7 +88,8 @@ QVariant GPUCommandListModel::data(const QModelIndex& index, int role) const {
     return QVariant();
 }
 
-QVariant GPUCommandListModel::headerData(int section, Qt::Orientation orientation, int role) const {
+QVariant GPUCommandListModel::headerData(int section, [[maybe_unused]] Qt::Orientation orientation,
+                                         int role) const {
     switch (role) {
     case Qt::DisplayRole: {
         switch (section) {
@@ -129,7 +129,7 @@ void GPUCommandListWidget::OnCommandDoubleClicked(const QModelIndex& index) {
         COMMAND_IN_RANGE(command_id, texturing.texture1) ||
         COMMAND_IN_RANGE(command_id, texturing.texture2)) {
 
-        unsigned texture_index;
+        [[maybe_unused]] u32 texture_index;
         if (COMMAND_IN_RANGE(command_id, texturing.texture0)) {
             texture_index = 0;
         } else if (COMMAND_IN_RANGE(command_id, texturing.texture1)) {

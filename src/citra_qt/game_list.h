@@ -37,6 +37,8 @@ enum class GameListOpenTarget {
     TEXTURE_DUMP = 4,
     TEXTURE_LOAD = 5,
     MODS = 6,
+    DLC_DATA = 7,
+    SHADER_CACHE = 8
 };
 
 class GameList : public QWidget {
@@ -70,7 +72,7 @@ public:
 
     QStandardItemModel* GetModel() const;
 
-    QString FindGameByProgramID(u64 program_id);
+    QString FindGameByProgramID(u64 program_id, int role);
 
     void RefreshGameDirectory();
 
@@ -82,6 +84,7 @@ signals:
     void OpenFolderRequested(u64 program_id, GameListOpenTarget target);
     void NavigateToGamedbEntryRequested(u64 program_id,
                                         const CompatibilityList& compatibility_list);
+    void OpenPerGameGeneralRequested(const QString file);
     void DumpRomFSRequested(QString game_path, u64 program_id);
     void OpenDirectory(const QString& directory);
     void AddDirectory();
@@ -105,7 +108,10 @@ private:
     void AddCustomDirPopup(QMenu& context_menu, QModelIndex selected);
     void AddPermDirPopup(QMenu& context_menu, QModelIndex selected);
 
-    QString FindGameByProgramID(QStandardItem* current_item, u64 program_id);
+    QString FindGameByProgramID(QStandardItem* current_item, u64 program_id, int role);
+
+    void changeEvent(QEvent*) override;
+    void RetranslateUI();
 
     GameListSearchField* search_field;
     GMainWindow* main_window = nullptr;

@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>400</width>
-    <height>595</height>
+    <height>634</height>
    </rect>
   </property>
   <property name="minimumSize">
@@ -207,6 +207,31 @@
         </item>
        </layout>
       </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_9">
+        <item>
+         <widget class="QLabel" name="label_6">
+          <property name="text">
+           <string>Eye to Render in Monoscopic Mode</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QComboBox" name="mono_rendering_eye">
+          <item>
+           <property name="text">
+            <string>Left Eye (default)</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>Right Eye</string>
+           </property>
+          </item>
+         </widget>
+        </item>
+       </layout>
+      </item>
      </layout>
     </widget>
    </item>
@@ -245,6 +270,11 @@
           <item>
            <property name="text">
             <string>Side by Side</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>Separate Windows</string>
            </property>
           </item>
          </widget>
@@ -343,6 +373,22 @@
    </item>
   </layout>
  </widget>
+ <tabstops>
+  <tabstop>resolution_factor_combobox</tabstop>
+  <tabstop>toggle_linear_filter</tabstop>
+  <tabstop>shader_combobox</tabstop>
+  <tabstop>texture_filter_combobox</tabstop>
+  <tabstop>render_3d_combobox</tabstop>
+  <tabstop>factor_3d</tabstop>
+  <tabstop>mono_rendering_eye</tabstop>
+  <tabstop>layout_combobox</tabstop>
+  <tabstop>swap_screen</tabstop>
+  <tabstop>upright_screen</tabstop>
+  <tabstop>bg_button</tabstop>
+  <tabstop>toggle_custom_textures</tabstop>
+  <tabstop>toggle_dump_textures</tabstop>
+  <tabstop>toggle_preload_textures</tabstop>
+ </tabstops>
  <resources/>
  <connections/>
 </ui>

@@ -6,12 +6,12 @@
 #include <cstring>
 #include "common/archives.h"
 #include "common/assert.h"
+#include "common/settings.h"
 #include "core/core.h"
 #include "core/core_timing.h"
 #include "core/hle/kernel/shared_page.h"
 #include "core/hle/service/ptm/ptm.h"
 #include "core/movie.h"
-#include "core/settings.h"
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -37,7 +37,7 @@ static std::chrono::seconds GetInitTime() {
         return std::chrono::seconds(override_init_time);
     }
 
-    switch (Settings::values.init_clock) {
+    switch (Settings::values.init_clock.GetValue()) {
     case Settings::InitClock::SystemTime: {
         auto now = std::chrono::system_clock::now();
         // If the system time is in daylight saving, we give an additional hour to console time
@@ -45,12 +45,22 @@ static std::chrono::seconds GetInitTime() {
         std::tm* now_tm = std::localtime(&now_time_t);
         if (now_tm && now_tm->tm_isdst > 0)
             now = now + std::chrono::hours(1);
+
+        // add the offset
+        s64 init_time_offset = Settings::values.init_time_offset.GetValue();
+        long long days_offset = init_time_offset / 86400;
+        long long days_offset_in_seconds = days_offset * 86400; // h/m/s truncated
+        unsigned long long seconds_offset =
+            std::abs(init_time_offset) - std::abs(days_offset_in_seconds);
+
+        now = now + std::chrono::seconds(seconds_offset);
+        now = now + std::chrono::seconds(days_offset_in_seconds);
         return std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
     }
     case Settings::InitClock::FixedTime:
-        return std::chrono::seconds(Settings::values.init_time);
+        return std::chrono::seconds(Settings::values.init_time.GetValue());
     default:
-        UNREACHABLE_MSG("Invalid InitClock value ({})", Settings::values.init_clock);
+        UNREACHABLE_MSG("Invalid InitClock value ({})", Settings::values.init_clock.GetValue());
     }
 }
 
@@ -75,7 +85,7 @@ Handler::Handler(Core::Timing& timing) : timing(timing) {
                                              std::bind(&Handler::UpdateTimeCallback, this, _1, _2));
     timing.ScheduleEvent(0, update_time_event, 0, 0);
 
-    float slidestate = Settings::values.factor_3d / 100.0f;
+    float slidestate = Settings::values.factor_3d.GetValue() / 100.0f;
     shared_page.sliderstate_3d = static_cast<float_le>(slidestate);
 }
 
@@ -94,7 +104,7 @@ u64 Handler::GetSystemTime() const {
     epoch_tm.tm_mon = 0;
     epoch_tm.tm_year = 100;
     epoch_tm.tm_isdst = 0;
-    u64 epoch = std::mktime(&epoch_tm) * 1000;
+    s64 epoch = std::mktime(&epoch_tm) * 1000;
 
     // 3DS console time uses Jan 1 1900 as internal epoch,
     // so we use the milliseconds between 1900 and 2000 as base console time
@@ -108,7 +118,7 @@ u64 Handler::GetSystemTime() const {
     return console_time;
 }
 
-void Handler::UpdateTimeCallback(u64 userdata, int cycles_late) {
+void Handler::UpdateTimeCallback(std::uintptr_t user_data, int cycles_late) {
     DateTime& date_time =
         shared_page.date_time_counter % 2 ? shared_page.date_time_0 : shared_page.date_time_1;
 

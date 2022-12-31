@@ -450,7 +450,7 @@ void DspLle::SetServiceToInterrupt(std::weak_ptr<Service::DSP::DSP_DSP> dsp) {
                 return;
             if (pipe == 0) {
                 // pipe 0 is for debug. 3DS automatically drains this pipe and discards the data
-                impl->ReadPipe(pipe, impl->GetPipeReadableSize(pipe));
+                impl->ReadPipe(static_cast<u8>(pipe), impl->GetPipeReadableSize(pipe));
             } else {
                 std::lock_guard lock(HLE::g_hle_lock);
                 if (auto locked = dsp.lock()) {
@@ -481,6 +481,22 @@ DspLle::DspLle(Memory::MemorySystem& memory, bool multithread)
     };
     ahbm.write8 = [&memory](u32 address, u8 value) {
         *memory.GetFCRAMPointer(address - Memory::FCRAM_PADDR) = value;
+    };
+    ahbm.read16 = [&memory](u32 address) -> u16 {
+        u16 value;
+        std::memcpy(&value, memory.GetFCRAMPointer(address - Memory::FCRAM_PADDR), sizeof(u16));
+        return value;
+    };
+    ahbm.write16 = [&memory](u32 address, u16 value) {
+        std::memcpy(memory.GetFCRAMPointer(address - Memory::FCRAM_PADDR), &value, sizeof(u16));
+    };
+    ahbm.read32 = [&memory](u32 address) -> u32 {
+        u32 value;
+        std::memcpy(&value, memory.GetFCRAMPointer(address - Memory::FCRAM_PADDR), sizeof(u32));
+        return value;
+    };
+    ahbm.write32 = [&memory](u32 address, u32 value) {
+        std::memcpy(memory.GetFCRAMPointer(address - Memory::FCRAM_PADDR), &value, sizeof(u32));
     };
     impl->teakra.SetAHBMCallback(ahbm);
     impl->teakra.SetAudioCallback(

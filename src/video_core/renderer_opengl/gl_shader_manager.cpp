@@ -1,16 +1,18 @@
-// Copyright 2018 Citra Emulator Project
+// Copyright 2022 Citra Emulator Project
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
 #include <algorithm>
+#include <set>
 #include <thread>
 #include <unordered_map>
-#include <boost/functional/hash.hpp>
 #include <boost/variant.hpp>
-#include "core/core.h"
 #include "core/frontend/scope_acquire_context.h"
+#include "video_core/renderer_opengl/gl_resource_manager.h"
 #include "video_core/renderer_opengl/gl_shader_disk_cache.h"
 #include "video_core/renderer_opengl/gl_shader_manager.h"
+#include "video_core/renderer_opengl/gl_state.h"
+#include "video_core/renderer_opengl/gl_vars.h"
 #include "video_core/video_core.h"
 
 namespace OpenGL {
@@ -18,12 +20,14 @@ namespace OpenGL {
 static u64 GetUniqueIdentifier(const Pica::Regs& regs, const ProgramCode& code) {
     std::size_t hash = 0;
     u64 regs_uid = Common::ComputeHash64(regs.reg_array.data(), Pica::Regs::NUM_REGS * sizeof(u32));
-    boost::hash_combine(hash, regs_uid);
+    hash = Common::HashCombine(hash, regs_uid);
+
     if (code.size() > 0) {
         u64 code_uid = Common::ComputeHash64(code.data(), code.size() * sizeof(u32));
-        boost::hash_combine(hash, code_uid);
+        hash = Common::HashCombine(hash, code_uid);
     }
-    return static_cast<u64>(hash);
+
+    return hash;
 }
 
 static OGLProgram GeneratePrecompiledProgram(const ShaderDiskCacheDump& dump,
@@ -89,8 +93,9 @@ static void SetShaderUniformBlockBinding(GLuint shader, const char* name, Unifor
     }
     GLint ub_size = 0;
     glGetActiveUniformBlockiv(shader, ub_index, GL_UNIFORM_BLOCK_DATA_SIZE, &ub_size);
-    ASSERT_MSG(ub_size == expected_size, "Uniform block size did not match! Got {}, expected {}",
-               static_cast<int>(ub_size), expected_size);
+    ASSERT_MSG(static_cast<std::size_t>(ub_size) == expected_size,
+               "Uniform block size did not match! Got {}, expected {}", static_cast<int>(ub_size),
+               expected_size);
     glUniformBlockBinding(shader, ub_index, static_cast<GLuint>(binding));
 }
 
@@ -148,11 +153,11 @@ void PicaUniformsData::SetFromRegs(const Pica::ShaderRegs& regs,
     std::transform(std::begin(setup.uniforms.b), std::end(setup.uniforms.b), std::begin(bools),
                    [](bool value) -> BoolAligned { return {value ? GL_TRUE : GL_FALSE}; });
     std::transform(std::begin(regs.int_uniforms), std::end(regs.int_uniforms), std::begin(i),
-                   [](const auto& value) -> GLuvec4 {
+                   [](const auto& value) -> Common::Vec4u {
                        return {value.x.Value(), value.y.Value(), value.z.Value(), value.w.Value()};
                    });
     std::transform(std::begin(setup.uniforms.f), std::end(setup.uniforms.f), std::begin(f),
-                   [](const auto& value) -> GLvec4 {
+                   [](const auto& value) -> Common::Vec4f {
                        return {value.x.ToFloat32(), value.y.ToFloat32(), value.z.ToFloat32(),
                                value.w.ToFloat32()};
                    });
@@ -333,6 +338,10 @@ public:
     }
 
     struct ShaderTuple {
+        std::size_t vs_hash = 0;
+        std::size_t gs_hash = 0;
+        std::size_t fs_hash = 0;
+
         GLuint vs = 0;
         GLuint gs = 0;
         GLuint fs = 0;
@@ -350,23 +359,13 @@ public:
         }
 
         std::size_t GetConfigHash() const {
-            std::size_t hash = 0;
-            boost::hash_combine(hash, vs_hash);
-            boost::hash_combine(hash, gs_hash);
-            boost::hash_combine(hash, fs_hash);
-            return hash;
+            return Common::ComputeHash64(this, sizeof(std::size_t) * 3);
         }
-
-        struct Hash {
-            std::size_t operator()(const ShaderTuple& tuple) const {
-                std::size_t hash = 0;
-                boost::hash_combine(hash, tuple.vs);
-                boost::hash_combine(hash, tuple.gs);
-                boost::hash_combine(hash, tuple.fs);
-                return hash;
-            }
-        };
     };
+
+    static_assert(offsetof(ShaderTuple, vs_hash) == 0, "ShaderTuple layout changed!");
+    static_assert(offsetof(ShaderTuple, fs_hash) == sizeof(std::size_t) * 2,
+                  "ShaderTuple layout changed!");
 
     bool is_amd;
     bool separable;
@@ -379,8 +378,7 @@ public:
     FixedGeometryShaders fixed_geometry_shaders;
 
     FragmentShaders fragment_shaders;
-    std::unordered_map<ShaderTuple, OGLProgram, ShaderTuple::Hash> program_cache;
-    std::unordered_map<u64, OGLProgram> disk_program_cache;
+    std::unordered_map<u64, OGLProgram> program_cache;
     OGLPipeline pipeline;
     ShaderDiskCache disk_cache;
 };
@@ -410,6 +408,7 @@ bool ShaderProgramManager::UseProgrammableVertexShader(const Pica::Regs& regs,
         const ShaderDiskCacheRaw raw{unique_identifier, ProgramType::VS, regs,
                                      std::move(program_code)};
         disk_cache.SaveRaw(raw);
+        disk_cache.SaveDecompiled(unique_identifier, *result, VideoCore::g_hw_shader_accurate_mul);
     }
     return true;
 }
@@ -463,20 +462,14 @@ void ShaderProgramManager::ApplyTo(OpenGLState& state) {
         state.draw.shader_program = 0;
         state.draw.program_pipeline = impl->pipeline.handle;
     } else {
-        OGLProgram& cached_program = impl->program_cache[impl->current];
+        const u64 unique_identifier = impl->current.GetConfigHash();
+        OGLProgram& cached_program = impl->program_cache[unique_identifier];
         if (cached_program.handle == 0) {
-            u64 unique_identifier = impl->current.GetConfigHash();
-            OGLProgram& disk_program = (impl->disk_program_cache[unique_identifier]);
-            if (disk_program.handle != 0) {
-                cached_program = std::move(disk_program);
-                impl->disk_program_cache.erase(unique_identifier);
-            } else {
-                cached_program.Create(false,
-                                      {impl->current.vs, impl->current.gs, impl->current.fs});
-                auto& disk_cache = impl->disk_cache;
-                disk_cache.SaveDumpToFile(unique_identifier, cached_program.handle,
-                                          VideoCore::g_hw_shader_accurate_mul);
-            }
+            cached_program.Create(false, {impl->current.vs, impl->current.gs, impl->current.fs});
+            auto& disk_cache = impl->disk_cache;
+            disk_cache.SaveDumpToFile(unique_identifier, cached_program.handle,
+                                      VideoCore::g_hw_shader_accurate_mul);
+
             SetShaderUniformBlockBindings(cached_program.handle);
             SetShaderSamplerBindings(cached_program.handle);
         }
@@ -514,7 +507,7 @@ void ShaderProgramManager::LoadDiskCache(const std::atomic_bool& stop_loading,
     }
     std::vector<std::size_t> load_raws_index;
     // Loads both decompiled and precompiled shaders from the cache. If either one is missing for
-    const auto LoadPrecompiledWorker = [&](std::size_t begin, std::size_t end,
+    const auto LoadPrecompiledShader = [&](std::size_t begin, std::size_t end,
                                            const std::vector<ShaderDiskCacheRaw>& raw_cache,
                                            const ShaderDecompiledMap& decompiled_map,
                                            const ShaderDumpsMap& dump_map) {
@@ -522,7 +515,7 @@ void ShaderProgramManager::LoadDiskCache(const std::atomic_bool& stop_loading,
             if (stop_loading || compilation_failed) {
                 return;
             }
-            const auto& raw{raw_cache[i]};
+            const auto& raw{raws[i]};
             const u64 unique_identifier{raw.GetUniqueIdentifier()};
 
             const u64 calculated_hash =
@@ -606,7 +599,9 @@ void ShaderProgramManager::LoadDiskCache(const std::atomic_bool& stop_loading,
             OGLProgram shader =
                 GeneratePrecompiledProgram(dump.second, supported_formats, impl->separable);
             if (shader.handle != 0) {
-                impl->disk_program_cache.insert({unique_identifier, std::move(shader)});
+                SetShaderUniformBlockBindings(shader.handle);
+                SetShaderSamplerBindings(shader.handle);
+                impl->program_cache.emplace(unique_identifier, std::move(shader));
             } else {
                 LOG_ERROR(Frontend, "Failed to link Precompiled program!");
                 compilation_failed = true;
@@ -619,34 +614,45 @@ void ShaderProgramManager::LoadDiskCache(const std::atomic_bool& stop_loading,
     };
 
     if (impl->separable) {
-        LoadPrecompiledWorker(0, raws.size(), raws, decompiled, dumps);
+        LoadPrecompiledShader(0, raws.size(), raws, decompiled, dumps);
     } else {
         LoadPrecompiledProgram(decompiled, dumps);
     }
 
+    bool load_all_raws = false;
     if (compilation_failed) {
         // Invalidate the precompiled cache if a shader dumped shader was rejected
-        impl->disk_program_cache.clear();
+        impl->program_cache.clear();
         disk_cache.InvalidatePrecompiled();
         dumps.clear();
         precompiled_cache_altered = true;
+        load_all_raws = true;
+    }
+    // TODO(SachinV): Skip loading raws until we implement a proper way to link non-seperable
+    // shaders.
+    if (!impl->separable) {
+        return;
     }
 
+    const std::size_t load_raws_size = load_all_raws ? raws.size() : load_raws_index.size();
+
     if (callback) {
-        callback(VideoCore::LoadCallbackStage::Build, 0, raws.size());
+        callback(VideoCore::LoadCallbackStage::Build, 0, load_raws_size);
     }
 
     compilation_failed = false;
 
     std::size_t built_shaders = 0; // It doesn't have be atomic since it's used behind a mutex
-    const auto LoadTransferable = [&](Frontend::GraphicsContext* context, std::size_t begin,
+    const auto LoadRawSepareble = [&](Frontend::GraphicsContext* context, std::size_t begin,
                                       std::size_t end) {
         Frontend::ScopeAcquireContext scope(*context);
         for (std::size_t i = begin; i < end; ++i) {
             if (stop_loading || compilation_failed) {
                 return;
             }
-            const auto& raw{raws[i]};
+
+            const std::size_t raws_index = load_all_raws ? i : load_raws_index[i];
+            const auto& raw{raws[raws_index]};
             const u64 unique_identifier{raw.GetUniqueIdentifier()};
 
             bool sanitize_mul = false;
@@ -686,34 +692,39 @@ void ShaderProgramManager::LoadDiskCache(const std::atomic_bool& stop_loading,
 
             std::scoped_lock lock(mutex);
             // If this is a new separable shader, add it the precompiled cache
-            if (impl->separable && result) {
+            if (result) {
                 disk_cache.SaveDecompiled(unique_identifier, *result, sanitize_mul);
                 disk_cache.SaveDump(unique_identifier, handle);
                 precompiled_cache_altered = true;
             }
 
             if (callback) {
-                callback(VideoCore::LoadCallbackStage::Build, ++built_shaders, raws.size());
+                callback(VideoCore::LoadCallbackStage::Build, ++built_shaders, load_raws_size);
             }
         }
     };
 
     const std::size_t num_workers{std::max(1U, std::thread::hardware_concurrency())};
-    const std::size_t bucket_size{transferable->size() / num_workers};
+    const std::size_t bucket_size{load_raws_size / num_workers};
     std::vector<std::unique_ptr<Frontend::GraphicsContext>> contexts(num_workers);
     std::vector<std::thread> threads(num_workers);
+
+    emu_window.SaveContext();
     for (std::size_t i = 0; i < num_workers; ++i) {
         const bool is_last_worker = i + 1 == num_workers;
         const std::size_t start{bucket_size * i};
-        const std::size_t end{is_last_worker ? transferable->size() : start + bucket_size};
+        const std::size_t end{is_last_worker ? load_raws_size : start + bucket_size};
 
         // On some platforms the shared context has to be created from the GUI thread
         contexts[i] = emu_window.CreateSharedContext();
-        threads[i] = std::thread(LoadTransferable, contexts[i].get(), start, end);
+        // Release the context, so it can be immediately used by the spawned thread
+        contexts[i]->DoneCurrent();
+        threads[i] = std::thread(LoadRawSepareble, contexts[i].get(), start, end);
     }
     for (auto& thread : threads) {
         thread.join();
     }
+    emu_window.RestoreContext();
 
     if (compilation_failed) {
         disk_cache.InvalidateAll();
